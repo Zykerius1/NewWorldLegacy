@@ -1,0 +1,36 @@
+# Rojo / Roblox Studio build output
+# src/ is the source of truth -- never commit built places or models.
+/build/
+*.rbxl
+*.rbxlx
+*.rbxm
+*.rbxmx
+*.rbxl.lock
+*.rbxlx.lock
+sourcemap.json
+
+# Toolchain binaries (the manifests themselves stay committed)
+.rokit/bin/
+.aftman/
+.aftman.toml.bak
+
+# Editors / OS
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+logs/
+
+# Secrets -- never commit API keys
+.env
+.env.*
+*.local
+
+# Dependencies
+node_modules/
