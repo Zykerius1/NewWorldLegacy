@@ -48,7 +48,10 @@
 		ageMax: number?,
 		weight: number?,
 		chainOnly: boolean?,
+		-- true = the generic/texture tier: can fire again later in the same run,
+		-- but not within `cooldown` years of the last time it fired.
 		repeatable: boolean?,
+		cooldown: number?,
 		requires: {
 			race: { string }?,
 			flags: { string }?,
@@ -78,6 +81,8 @@
 		notoriety: number,
 		flags: { [string]: boolean },
 		fired: { [string]: boolean },
+		-- age each repeatable last fired at, for the cooldown gate
+		firedAt: { [string]: number },
 		chainQueue: { { id: string, atAge: number } },
 		notable: { string },
 		history: { string },

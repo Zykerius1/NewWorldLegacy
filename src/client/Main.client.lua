@@ -210,7 +210,7 @@ local createPanel = UiKit.panel(createFrame, {
     Position = UDim2.new(0, 40, 0, 40),
 }, 24)
 
-local createTitle = UiKit.label(createPanel, {
+UiKit.label(createPanel, {
     Text = "FIRST LIGHT",
     Size = UDim2.new(1, 0, 0, 26),
     Font = UiKit.FontUi,
@@ -673,7 +673,7 @@ local function renderCreate(view)
         for _, extra in ipairs(race.extra) do
             table.insert(lines, extra)
         end
-        local button = UiKit.button(createSheet, {
+        UiKit.button(createSheet, {
             Text = table.concat(lines, "   ·   "),
             Size = UDim2.new(1, 0, 0, 46),
             LayoutOrder = order,

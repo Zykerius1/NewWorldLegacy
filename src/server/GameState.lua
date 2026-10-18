@@ -107,7 +107,8 @@ function GameState:reset()
     self.lifespan = nil
 
     self.flags = {}
-    self.fired = {}
+    self.fired = {} -- authored tier: one firing per run, never recycled
+    self.firedAt = {} -- repeatable tier: the age each generic last fired at
     self.chainQueue = {}
     self.notable = {}
     self.history = {}
@@ -317,7 +318,10 @@ function GameState:ageUp()
     local event = Events.dueChain(self) or Events.draw(self, self.rng)
     if event then
         self.pendingEvent = event
-        self.fired[event.id] = true -- anti-repetition: an event fires once a run
+        -- Anti-repetition, per tier: an authored event fires once a run, a
+        -- generic records the year so its cooldown can hold it back.
+        self.fired[event.id] = true
+        self.firedAt[event.id] = self.age
         self.quietLine = nil
         self.phase = "event"
     else

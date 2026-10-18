@@ -242,6 +242,32 @@ Config.Names = {
 	},
 }
 
+-- ===========================================================================
+-- TUNING — Event density. Two tiers of content sit behind the draw:
+--   * the authored events (Events.All) are the beats of a life. They fire
+--     whenever they are eligible, once per run, and are never recycled.
+--   * the repeatable tier (Events.Repeatable) is ordinary life — work, weather,
+--     illness, money, a neighbour, a debt. Each entry carries a `cooldown` in
+--     years, so it can come round again without reading as recycled.
+-- `repeatChance` is the per-year odds that a year the authored tier did not
+-- claim still offers a repeatable card. Every other year is a quiet year
+-- (Config.QuietYearLines) — never a blank one. Bands are read top-down; the
+-- first band whose maxAge the character has not passed wins.
+-- The target percentages are the ones the headless harness measures.
+-- ===========================================================================
+Config.EventDraw = {
+	repeatChance = {
+		{ maxAge = 2, chance = 0.00 }, -- infancy is not a card
+		{ maxAge = 12, chance = 0.34 }, -- target 50-60%: a quiet childhood is intended
+		{ maxAge = 17, chance = 0.92 }, -- target 80-100%
+		{ maxAge = 55, chance = 0.58 }, -- target 60-70%
+		{ maxAge = 999, chance = 0.43 }, -- target 40-50%
+	},
+	cooldownDefault = 4, -- years before the same generic may come round again
+	-- Floor rule: if every generic for this age is still cooling, serve the one
+	-- seen longest ago rather than leave an adult year with nothing.
+	respectCooldownAsFloor = true,
+}
 -- Quiet years: the world is mostly uneventful and that is the point
 -- (design brief §4.2). One line, no choice.
 Config.QuietYearLines = {

@@ -15,7 +15,8 @@
             ageMin    = 4, ageMax = 6,     -- inclusive
             weight    = 12,                -- base draw weight
             chainOnly = false,             -- true = only fires from a chain queue
-            repeatable= false,
+            repeatable= false,             -- true = the generic tier (Events.Repeatable)
+            cooldown  = 4,                 -- years before a repeatable may return
             requires  = {                  -- ALL must pass or it is not in the pool
                 race      = { "human", "dwarf", "elf" },  -- omit = any
                 flags     = { "family_poor" },
@@ -43,6 +44,18 @@
     Rules the content obeys (design brief §4.1): two or three choices, never
     four; no choice obviously correct; common choices boring on purpose;
     never a number in the prose; never a wink.
+
+    Two tiers, and the difference matters:
+
+    * Events.All — the authored beats of a life. They fire once a
+      run and are never recycled, because a beat that repeats stops being one.
+    * Events.Repeatable — ordinary life: work, weather, illness, a debt, a
+      neighbour. Each carries `cooldown`, the number of years before it may
+      come round again. Small deltas, wide age bands.
+
+    The draw spends an authored event if one is eligible, otherwise rolls the
+    age band's repeat chance (Config.EventDraw) for a generic, otherwise serves
+    a quiet year from Config.QuietYearLines. A year is never blank.
 ]]
 
 local Config = require(script.Parent.Config)
@@ -769,6 +782,789 @@ Events.All = {
 -- ===========================================================================
 
 --- Look up a stat by key: an attribute, or one of the tracked resources.
+-- ===========================================================================
+-- The repeatable tier. Ordinary life, not the beats of a life.
+--
+-- These are the years between the authored events: work, weather, illness, a
+-- debt, a neighbour, a decision about money or family. Everything here is
+-- `repeatable = true` with a `cooldown` in years, so the same one can come
+-- round again in a long life without reading as recycled. Deltas are
+-- deliberately small — a generic that pays +2 STR is a farm, not a year.
+--
+-- Authored content stays in Events.All above and is never recycled.
+-- ===========================================================================
+
+Events.Repeatable = {
+    ------------------------------------------------------------------ childhood
+    {
+        id = "R_CHILD_FEVER",
+        title = "The Fever",
+        stage = "childhood",
+        ageMin = 3,
+        ageMax = 11,
+        weight = 10,
+        repeatable = true,
+        cooldown = 5,
+        text = "You wake because your teeth are loud. The room is a different size than it was, and "
+            .. "someone has left the lamp burning, which nobody does.\n\nThere is a weight on your chest "
+            .. "that is not a weight, and when you try to say so, the sound that comes out is not a word. "
+            .. "Downstairs, your mother is moving about, and the boards say she is not going to bed.",
+        choices = {
+            {
+                label = "Lie still and say nothing.",
+                warn = "risk",
+                text = "You are still there in the morning, which surprises you slightly. Nobody ever "
+                    .. "knows you were ill, and you keep it that way, the way you will keep a great many "
+                    .. "things that were none of anybody's business.",
+                deltas = { health = -6, attr = { VIT = 1 } },
+            },
+            {
+                label = "Call for her.",
+                warn = "safe",
+                text = "She is up the stairs before the second word. She sits with you until the lamp "
+                    .. "burns down and does not once tell you it is nothing. It is not nothing. She is "
+                    .. "frightened, and she is good at it.",
+                deltas = { health = -3, attr = { WIS = 1 } },
+            },
+            {
+                label = "Get up and go down to her.",
+                warn = "risk",
+                text = "You make it to the third step before your legs stop being yours. She carries you "
+                    .. "back up, which she should not be able to do, and says nothing about it, then or "
+                    .. "ever.",
+                deltas = { health = -8, attr = { VIT = 1, WIS = 1 } },
+            },
+        },
+    },
+
+    {
+        id = "R_CHILD_WATER",
+        title = "The Water",
+        stage = "childhood",
+        ageMin = 5,
+        ageMax = 12,
+        weight = 12,
+        repeatable = true,
+        cooldown = 3,
+        text = "The well is at the end of the lane and the bucket comes up heavy, and you have been given "
+            .. "the job because you are big enough to have it and not big enough to refuse it.\n\n"
+            .. "On the way back the bucket finds the edge of a stone and half of it goes into the dust. "
+            .. "There is nobody on the lane. There is time to go back.",
+        choices = {
+            {
+                label = "Go back and fill it again.",
+                warn = "safe",
+                text = "You go back. Your arms do not thank you and the afternoon is gone, but the pot "
+                    .. "is full, and you have learned what the whole job costs instead of what half of it "
+                    .. "costs.",
+                deltas = { attr = { STR = 1 }, exp = 5 },
+            },
+            {
+                label = "Take the half bucket home.",
+                warn = "risk",
+                text = "Nobody says anything, which is worse than being told. At the table there is less "
+                    .. "of it than there should be, and you eat it anyway, and you are the only one at that "
+                    .. "table who knows why.",
+                deltas = { attr = { WIS = 1, VIT = -1 } },
+            },
+            {
+                label = "Ask the neighbour's boy to help you carry it.",
+                warn = "[CHA]",
+                check = { attr = "CHA", dc = 10 },
+                success = {
+                    text = "He does it, and complains the whole way, and comes back the next day without "
+                        .. "being asked. That is how you find out that most people will do a thing if "
+                        .. "someone is standing there while they do it.",
+                    deltas = { attr = { CHA = 1 }, exp = 5 },
+                },
+                failure = {
+                    text = "He looks at the bucket, then at you, and goes inside. You carry it yourself, "
+                        .. "and the walk back is longer than it was, and you are angry in a way you cannot "
+                        .. "put anywhere useful.",
+                    deltas = { attr = { STR = 1, CHA = -1 } },
+                },
+            },
+        },
+    },
+
+    {
+        id = "R_CHILD_NEIGHBOUR",
+        title = "What the Boy Broke",
+        stage = "childhood",
+        ageMin = 6,
+        ageMax = 12,
+        weight = 10,
+        repeatable = true,
+        cooldown = 5,
+        text = "The pot by the door is in three pieces, and the neighbour's boy is standing over it, and "
+            .. "he is not running, which means he has decided something already.\n\nHe says it was the "
+            .. "dog. There is no dog. He says this without any hope at all, the way people say things "
+            .. "they have already stopped believing, and you understand that he is not asking you to "
+            .. "believe him. He is asking you to agree.",
+        choices = {
+            {
+                label = "Say it was the dog.",
+                warn = "risk",
+                text = "It costs you a beating and buys him one afternoon. He never thanks you. Years "
+                    .. "later he will be the one who tells you what happened to your father's land, and "
+                    .. "neither of you will mention the pot.",
+                deltas = { karma = 2, attr = { CHA = 1 }, health = -2 },
+            },
+            {
+                label = "Say what you saw.",
+                warn = "safe",
+                text = "He takes it, badly and loudly, and the two houses do not speak for a season over "
+                    .. "it. You are told you did right, in the tone people use when they mean that you "
+                    .. "made something harder for them.",
+                deltas = { karma = 1, attr = { WIS = 1 } },
+            },
+            {
+                label = "Say nothing at all.",
+                warn = "risk",
+                text = "You stand there with your mouth shut until an adult comes out and decides the "
+                    .. "whole thing without you. That is the first time you notice how often that works.",
+                deltas = { attr = { WIS = 1 }, karma = -1 },
+            },
+        },
+    },
+
+    --------------------------------------------------------------- adolescence
+    {
+        id = "R_WAGE_SHORT",
+        title = "The Day's Wage",
+        stage = "adolescence",
+        ageMin = 13,
+        ageMax = 17,
+        weight = 12,
+        repeatable = true,
+        cooldown = 3,
+        text = "You have been in the field for six days. At the end of it the farmer counts coin into "
+            .. "your hand, slowly, the way a man counts when he wants you to watch him count, and it is "
+            .. "short. Not by much. By enough that he knows you know.",
+        choices = {
+            {
+                label = "Count it out loud, in front of him.",
+                warn = "[CHA]",
+                check = { attr = "CHA", dc = 11 },
+                success = {
+                    text = "He listens to the number, looks at your hands, and puts the rest in without "
+                        .. "a word. Next week it is right the first time. He does not like you after "
+                        .. "this, and he hires you again anyway.",
+                    deltas = { coin = 12, attr = { CHA = 1 } },
+                },
+                failure = {
+                    text = "He says you cannot count, then, when that does not land, that you were slow, "
+                        .. "then that you should be grateful. You take the short wage and the afternoon "
+                        .. "worth of it, and you remember his face better than you meant to.",
+                    deltas = { coin = 6, attr = { WIS = 1 } },
+                },
+            },
+            {
+                label = "Take it and say nothing.",
+                warn = "safe",
+                text = "You take it. In the lane on the way home you work out the difference over a "
+                    .. "month and what it would have bought, which is a thing you cannot undo by working "
+                    .. "it out, and you do it anyway.",
+                deltas = { coin = 6, attr = { WIS = 1 } },
+            },
+            {
+                label = "Take it, and take a little back.",
+                warn = "risk",
+                text = "There is grain in the barn and no lock worth the name, and you are in and out "
+                    .. "before the lamp is lit. It is a small amount. It is also the first thing you have "
+                    .. "ever stolen, which is a fact that does not care about the amount.",
+                deltas = { coin = 18, karma = -2, attr = { DEX = 1 } },
+            },
+        },
+    },
+
+    {
+        id = "R_ENTRUSTED_COIN",
+        title = "What the Money Was For",
+        stage = "adolescence",
+        ageMin = 13,
+        ageMax = 17,
+        weight = 10,
+        repeatable = true,
+        cooldown = 4,
+        text = "You are sent to the market with coin for salt and a nail, and you are given the exact "
+            .. "amount, and you are told the price of both, which means you are trusted, which is a new "
+            .. "feeling and a heavy one.\n\nAt the third stall there is a thing you have wanted for two "
+            .. "years. It costs less than the salt.",
+        choices = {
+            {
+                label = "Buy the salt and the nail.",
+                warn = "safe",
+                text = "You come home with exactly what you were sent for and hand over the change, and "
+                    .. "nothing at all is said about it, and it is the best afternoon you have had in a "
+                    .. "while.",
+                deltas = { coin = -2, karma = 1, attr = { WIS = 1 } },
+            },
+            {
+                label = "Buy the thing, and say the price went up.",
+                warn = "risk",
+                text = "The lie is small and it holds, and it will hold for years, and it will be the "
+                    .. "reason you are careful about your own face in front of people who know you. You "
+                    .. "have the thing. You keep it where nobody looks.",
+                deltas = { karma = -2, attr = { CHA = 1, LUK = 1 } },
+            },
+            {
+                label = "Buy the thing and say nothing about it.",
+                warn = "risk",
+                text = "You come home short and cannot say why, and you stand there while the arithmetic "
+                    .. "is done out loud twice. What is remembered is not the missing coin. It is that "
+                    .. "you would not answer.",
+                deltas = { coin = -5, karma = -1, attr = { WIS = 1 } },
+            },
+        },
+    },
+
+    {
+        id = "R_ROOF_NEXT_DOOR",
+        title = "The Roof Next Door",
+        stage = "adolescence",
+        ageMin = 13,
+        ageMax = 17,
+        weight = 10,
+        repeatable = true,
+        cooldown = 3,
+        text = "The old man next door has a roof that will not survive the weather that is coming, and "
+            .. "he has asked you, which costs him something to do. He can pay you in firewood, and the "
+            .. "firewood is worth less than the day.\n\nYour own field wants you in it, and your father "
+            .. "has not said which day, and will not.",
+        choices = {
+            {
+                label = "Go up on the roof.",
+                warn = "safe",
+                text = "It takes the day and most of your hands. He watches from the ground and tells you "
+                    .. "where to put things, badly, and when it is done he stands in his own doorway and "
+                    .. "says thank you in a voice that has not done it much.",
+                deltas = { karma = 2, attr = { STR = 1 }, exp = 10 },
+            },
+            {
+                label = "Stay in your own field.",
+                warn = "safe",
+                text = "The weather comes, and the roof goes, and he moves in with his daughter across "
+                    .. "the water and does not come back. Some decisions are only visible from the far "
+                    .. "end of them.",
+                deltas = { coin = 4, karma = -1, attr = { WIS = 1 } },
+            },
+            {
+                label = "Do both, and do neither properly.",
+                warn = "[VIT]",
+                check = { attr = "VIT", dc = 11 },
+                success = {
+                    text = "You get the roof up and get the field in, and you are useless for a week "
+                        .. "afterwards, and both men assume you chose them. Nobody finds out that you "
+                        .. "did not.",
+                    deltas = { karma = 1, attr = { STR = 1, VIT = 1 }, health = -4 },
+                },
+                failure = {
+                    text = "You are on the roof in the rain at the end of it, and you have done it badly, "
+                        .. "and the field is not in. The old man does not blame you. He is too old to "
+                        .. "spend it on blame, which is somehow the part that stays.",
+                    deltas = { health = -8, karma = 1, attr = { WIS = 1 } },
+                },
+            },
+        },
+    },
+
+    ---------------------------------------------------------------- adulthood
+    {
+        id = "R_DEBT_NOTE",
+        title = "The Note",
+        stage = "adulthood",
+        ageMin = 18,
+        ageMax = 55,
+        weight = 12,
+        repeatable = true,
+        cooldown = 7,
+        text = "There was a bad year, and in that year you signed something, and the man who holds it "
+            .. "has been patient in a way that is worse than anger.\n\nHe is at the door on a dry day. "
+            .. "He does not raise his voice. He says he is not here about the money, and then he talks "
+            .. "about the money for a while, and you notice he has not sat down.",
+        choices = {
+            {
+                label = "Pay what you have and agree the rest.",
+                warn = "safe",
+                text = "It is nearly everything in the house. He counts it, writes in his book, and shakes "
+                    .. "your hand on the way out. You are poorer and you sleep, which you had stopped "
+                    .. "doing, and which you had not admitted to anyone.",
+                deltas = { coin = -30, karma = 1, attr = { WIS = 1 } },
+            },
+            {
+                label = "Ask for another year.",
+                warn = "[CHA]",
+                check = { attr = "CHA", dc = 12 },
+                success = {
+                    text = "He looks at you for a long moment, then writes something and tears out the "
+                        .. "page. It is not generosity. He has decided you are a better asset alive and "
+                        .. "working, and you will spend some part of the coming year being glad about "
+                        .. "that and some part of it not.",
+                    deltas = { attr = { CHA = 1 }, notoriety = 1 },
+                },
+                failure = {
+                    text = "He says no, pleasantly, and tells you what happens next in the same tone he "
+                        .. "used about the weather. You find the money. You find it at a price you would "
+                        .. "not have chosen.",
+                    deltas = { coin = -40, karma = -1, attr = { WIS = 1 } },
+                },
+            },
+            {
+                label = "Take the long way home for a while.",
+                warn = "risk",
+                text = "You are careful for two seasons and it works, which means nobody comes, which "
+                    .. "means nobody is coming. You keep the coin and something else goes: people on that "
+                    .. "road know your face now, and know what it does when the subject comes up.",
+                deltas = { coin = 10, notoriety = 2, karma = -1 },
+            },
+        },
+    },
+
+    {
+        id = "R_GOING_ROUND",
+        title = "Something Going Round",
+        stage = "adulthood",
+        ageMin = 18,
+        ageMax = 55,
+        weight = 12,
+        repeatable = true,
+        cooldown = 5,
+        text = "It starts in the next house and comes along the lane the way things come along lanes: "
+            .. "the children first, then the old, and then whoever was holding one of them when it "
+            .. "arrived.\n\nYou have work that will not wait, and there is a cough in your chest that "
+            .. "was not there last week, and you are the only person in the house who can stand up at "
+            .. "the moment.",
+        choices = {
+            {
+                label = "Work through it.",
+                warn = "[VIT]",
+                check = { attr = "VIT", dc = 12 },
+                success = {
+                    text = "You work, and sweat, and wake up on the fourth morning clear-headed, which is "
+                        .. "the way it goes for most people and is not how it feels at the time. The work "
+                        .. "is done. Nobody knows what it cost, including you.",
+                    deltas = { coin = 15, health = -6, attr = { VIT = 1 } },
+                },
+                failure = {
+                    text = "You are on your back for a fortnight, and the work is not done, and someone "
+                        .. "who owed you nothing does it. When you can stand again you are thinner and "
+                        .. "weaker than you were, and the season has moved on without asking you.",
+                    deltas = { health = -12, coin = -10, attr = { VIT = -1 } },
+                },
+            },
+            {
+                label = "Stay in and lose the week.",
+                warn = "safe",
+                text = "You take to the bed with a jug of water and let the week go. It costs you, in "
+                    .. "coin and in standing, and you are up before the fortnight is out, which is not "
+                    .. "true of the man two doors down.",
+                deltas = { coin = -15, health = 4, attr = { WIS = 1 } },
+            },
+            {
+                label = "Send for the woman who knows about fevers.",
+                warn = "risk",
+                text = "She comes, and burns something that smells like a burnt field, and charges for "
+                    .. "it. You are better in three days, or you were going to be better in three days, "
+                    .. "and there is no way to find out which, and she does not offer one.",
+                deltas = { coin = -12, health = 6, attr = { PIE = 1 } },
+            },
+        },
+    },
+
+    {
+        id = "R_BOUNDARY_STONE",
+        title = "The Boundary",
+        stage = "adulthood",
+        ageMin = 20,
+        ageMax = 55,
+        weight = 10,
+        repeatable = true,
+        cooldown = 6,
+        text = "The stones that mark where your ground ends have moved. Not far. Far enough that the "
+            .. "strip in question is worth less than the argument would cost, and far enough that "
+            .. "somebody stood in your field and did it.\n\nThis morning your neighbour is on his own "
+            .. "side, working, and he has the posture of a man who is not going to look up.",
+        choices = {
+            {
+                label = "Speak to him about it.",
+                warn = "[CHA]",
+                check = { attr = "CHA", dc = 12 },
+                success = {
+                    text = "He says the stones were always that way, and then, ten minutes in, says that "
+                        .. "his father said the stones were always that way. By the end the stones are "
+                        .. "back and neither of you has admitted anything, which is what a boundary is "
+                        .. "for.",
+                    deltas = { karma = 1, attr = { CHA = 1 } },
+                },
+                failure = {
+                    text = "It becomes a shouting thing in front of both houses, and then a thing the "
+                        .. "village has an opinion about. You keep the ground. You lose the morning, the "
+                        .. "standing, and any chance of asking him for anything again.",
+                    deltas = { notoriety = 1, karma = -1, attr = { CHA = -1 } },
+                },
+            },
+            {
+                label = "Move them back in the night.",
+                warn = "risk",
+                text = "It takes a quarter of an hour. He knows, because there is only one person it "
+                    .. "could have been, and he says nothing about it, and the two of you now have a "
+                    .. "kind of agreement that neither of you has agreed to.",
+                deltas = { attr = { DEX = 1 }, karma = -1 },
+            },
+            {
+                label = "Leave it.",
+                warn = "safe",
+                text = "The strip is a strip. For the rest of his life he is a man who took something "
+                    .. "from you and knows it, which is a small power, and you spend it slowly and never "
+                    .. "once mention it.",
+                deltas = { attr = { WIS = 1 }, karma = 1 },
+            },
+        },
+    },
+
+    {
+        id = "R_WET_YEAR",
+        title = "The Wet Year",
+        stage = "adulthood",
+        ageMin = 18,
+        ageMax = 55,
+        weight = 12,
+        repeatable = true,
+        cooldown = 4,
+        text = "It rains through the week the cutting should have been done, and then through the week "
+            .. "after that, and the grain in the low field goes grey and starts to smell sweet.\n\n"
+            .. "There is a man from the next village buying early and cheap, and there is a man in the "
+            .. "market town who might buy nothing at all in a month, and both of them are at the ends of "
+            .. "roads you can only walk down once.",
+        choices = {
+            {
+                label = "Sell it now, cheap.",
+                warn = "safe",
+                text = "You get less than it is worth and you get it today, and the coin is in the house "
+                    .. "where the winter cannot take it. What is ruined then is somebody else's problem, "
+                    .. "which is a sentence you would rather not have thought.",
+                deltas = { coin = 20, attr = { WIS = 1 } },
+            },
+            {
+                label = "Hold it and hope for a dry month.",
+                warn = "risk",
+                text = "The month is not dry. Half of it is fit for nothing and the other half goes for "
+                    .. "what you were offered in the first place, less the cost of the cart, and you "
+                    .. "spend the winter doing the arithmetic on the difference.",
+                deltas = { coin = -15, attr = { LUK = 1, WIS = 1 } },
+            },
+            {
+                label = "Buy in from the village that had a dry week.",
+                warn = "[INT]",
+                check = { attr = "INT", dc = 12 },
+                success = {
+                    text = "You buy low from people who do not know what the market town will pay, and "
+                        .. "you are right about what the market town will pay. It is not a proud way to "
+                        .. "make money and it works, and it is the first time you have done something "
+                        .. "the neighbours cannot quite copy.",
+                    deltas = { coin = 45, attr = { INT = 1 }, karma = -1 },
+                },
+                failure = {
+                    text = "You buy in and the price does not move, and the grain you bought sits in a "
+                        .. "barn beside the grain you grew. You have tied up everything you had in the "
+                        .. "one thing that was never going to hold its value, and you know it before "
+                        .. "anyone else does.",
+                    deltas = { coin = -35, attr = { INT = 1 } },
+                },
+            },
+        },
+    },
+
+    {
+        id = "R_CARRY_THIS",
+        title = "A Small Thing to Carry",
+        stage = "adulthood",
+        ageMin = 18,
+        ageMax = 55,
+        weight = 10,
+        repeatable = true,
+        cooldown = 7,
+        text = "The man has a good coat and clean hands and he has picked you out of the people at the "
+            .. "toll-house, which took him a while, which means he watched first.\n\nHe wants a bundle "
+            .. "carried past the gate as part of your own load. He is paying like it is heavy. It is not "
+            .. "heavy. He does not say what is in it and he does not say not to look, and he is watching "
+            .. "to see whether you ask.",
+        choices = {
+            {
+                label = "Refuse.",
+                warn = "safe",
+                text = "He takes it back without any change in his face, and by the time you are through "
+                    .. "the gate he is talking to somebody else in the same easy way. Whatever the bundle "
+                    .. "carried goes through, that afternoon, and it is not on you.",
+                deltas = { karma = 1, attr = { WIS = 1 } },
+            },
+            {
+                label = "Carry it and do not look.",
+                warn = "risk",
+                text = "The gate is the gate and nobody stops you, and the coin is more than a month of "
+                    .. "the honest kind. You will see him twice more in your life, both times in crowds, "
+                    .. "and both times he will look through you.",
+                deltas = { coin = 45, karma = -2, notoriety = 1 },
+            },
+            {
+                label = "Carry it, and open it where nobody can see.",
+                warn = "[WIS]",
+                check = { attr = "WIS", dc = 13 },
+                success = {
+                    text = "It is what you expected it to be, which is nothing that would hang you and "
+                        .. "nothing you want to be holding. You keep the knowledge and you keep your "
+                        .. "face shut, and you come back and ask him for the same rate again, and he "
+                        .. "pays it, because he now has a reason to.",
+                    deltas = { coin = 45, karma = -1, notoriety = 1, attr = { WIS = 1 } },
+                },
+                failure = {
+                    text = "You look, and you do it badly, and he notices, and the payment is short. "
+                        .. "Worse: you now know a face and a trade, and he knows that you know, and that "
+                        .. "is a thing that only runs one way.",
+                    deltas = { coin = 15, notoriety = 2, karma = -1, attr = { WIS = 1 } },
+                },
+            },
+        },
+    },
+
+    {
+        id = "R_MOTHERS_HANDS",
+        title = "Your Mother's Hands",
+        stage = "adulthood",
+        ageMin = 25,
+        ageMax = 55,
+        weight = 10,
+        repeatable = true,
+        cooldown = 8,
+        text = "Her hands have stopped being able to do the fine work, and she has started leaving the "
+            .. "hard work half-done and saying nothing about it, which from her is a kind of "
+            .. "announcement.\n\nShe has not asked. She has cleaned your house twice this month, badly, "
+            .. "as a way of being useful in the argument she is having with herself.",
+        choices = {
+            {
+                label = "Take her in.",
+                warn = "safe",
+                text = "She moves her things in over three trips and complains about the ceiling for a "
+                    .. "year. It costs you a room you were using and a standing you were building, and "
+                    .. "some mornings she is well and the house is warm, and that is the whole of it.",
+                deltas = { coin = -20, karma = 2, attr = { WIS = 1 } },
+            },
+            {
+                label = "Send coin every month and visit.",
+                warn = "safe",
+                text = "You are careful, and dutiful, and you are not there. She tells the neighbours "
+                    .. "about the coin, in a voice that has been arranged for their benefit, and you "
+                    .. "hear about it later, which is the arrangement she chose.",
+                deltas = { coin = -15, karma = 1 },
+            },
+            {
+                label = "Let whoever is nearest do it.",
+                warn = "risk",
+                text = "Somebody handles it, since somebody always handles it, and the somebody is not "
+                    .. "you, and it gets handled in a way you would not have chosen. You find out at the "
+                    .. "funeral what was decided, and by then the only useful thing left to say is that "
+                    .. "you were busy.",
+                deltas = { karma = -2, attr = { WIS = 1 } },
+            },
+        },
+    },
+
+    {
+        id = "R_WHAT_IS_OWED",
+        title = "What Is Owed",
+        stage = "adulthood",
+        ageMin = 22,
+        ageMax = 55,
+        weight = 10,
+        repeatable = true,
+        cooldown = 6,
+        text = "Somebody comes asking for help, and they have a claim on you: an afternoon, a debt, a "
+            .. "time you were carried when you could not walk. They do not spell it out. They do not "
+            .. "have to, and they know they do not have to, and that is the thing they are relying on.\n\n"
+            .. "What they need is more than you have loose.",
+        choices = {
+            {
+                label = "Give them what they ask.",
+                warn = "safe",
+                text = "You give it, and it is not convenient, and it goes the way most of these go: it "
+                    .. "is not paid back and it is not mentioned again. Something in the account between "
+                    .. "you is quiet after this, and quiet is the point of it.",
+                deltas = { coin = -25, karma = 2 },
+            },
+            {
+                label = "Give them less, and say why.",
+                warn = "[CHA]",
+                check = { attr = "CHA", dc = 11 },
+                success = {
+                    text = "You name a number and the reason, plainly, without dressing it up, and they "
+                        .. "take it and go; the amount was never the thing they came for. That is a door "
+                        .. "you can use again, and you will, and so will they.",
+                    deltas = { coin = -12, karma = 1, attr = { CHA = 1 } },
+                },
+                failure = {
+                    text = "The number sounds like a verdict when you say it out loud, and they hear it "
+                        .. "as one. They take it, and it is the last time either of you pretends there "
+                        .. "is an account.",
+                    deltas = { coin = -12, karma = -1, attr = { WIS = 1 } },
+                },
+            },
+            {
+                label = "Say you cannot.",
+                warn = "risk",
+                text = "You cannot, or you have decided you cannot, and you do not fully know which, and "
+                    .. "that is the part that will come back on the third night of some later week like "
+                    .. "this one.",
+                deltas = { karma = -2, attr = { WIS = 1 } },
+            },
+        },
+    },
+
+    ------------------------------------------------------------------- old age
+    {
+        id = "R_COLD_GETS_IN",
+        title = "The Cold Gets In",
+        stage = "adulthood",
+        ageMin = 56,
+        ageMax = 999,
+        weight = 12,
+        repeatable = true,
+        cooldown = 4,
+        text = "The house has a draught that was not there last year, or your blood is thinner than it "
+            .. "was, and the two were always going to meet in a room like this one.\n\nYou are stiff in "
+            .. "the morning now in a way that has to be waited out, and there is a stack of wood by the "
+            .. "shed that has to become a stack of wood by the fire, and there is nobody else in the "
+            .. "house who is going to do it.",
+        choices = {
+            {
+                label = "Keep the fire small and stay near it.",
+                warn = "safe",
+                text = "You burn less and sit closer. The winter is long and boring and survivable, "
+                    .. "which is a description that has come to fit a lot of things.",
+                deltas = { health = 2, coin = -5, attr = { WIS = 1 } },
+            },
+            {
+                label = "Go out for the wood anyway.",
+                warn = "[VIT]",
+                check = { attr = "VIT", dc = 12 },
+                success = {
+                    text = "You bring it in in three loads instead of one and stop between each. Nothing "
+                        .. "happens. That is what you say when it is asked, and it is true, and it is not "
+                        .. "the whole of the answer.",
+                    deltas = { health = -2, attr = { VIT = 1, WIS = 1 } },
+                },
+                failure = {
+                    text = "You are on the ground by the pile for a while before you are up again, and "
+                        .. "the cold you catch out there does not leave as quickly as it came. You tell "
+                        .. "people it was the ice.",
+                    deltas = { health = -10, attr = { VIT = -1 } },
+                },
+            },
+            {
+                label = "Ask the young family next door.",
+                warn = "risk",
+                text = "They come, and are kind, and are also working out what the arrangement is and "
+                    .. "what it might one day be worth. Both things are true. You take the wood and you "
+                    .. "let them have the calculation, and you do not sleep well about it.",
+                deltas = { coin = -10, karma = 1, health = 3, attr = { WIS = 1 } },
+            },
+        },
+    },
+
+    {
+        id = "R_WHAT_TO_LEAVE",
+        title = "What to Do With the House",
+        stage = "adulthood",
+        ageMin = 58,
+        ageMax = 999,
+        weight = 10,
+        repeatable = true,
+        cooldown = 9,
+        text = "The house is worth more than you thought it was, which you have learned from a man who "
+            .. "came round about it, and which he was careful not to say too plainly.\n\nThe people who "
+            .. "would have it have not been to see you in some time, and there is a version of this "
+            .. "where it goes while you are alive and you get to see what they do with it.",
+        choices = {
+            {
+                label = "Leave it to whoever stayed near.",
+                warn = "safe",
+                text = "You write it down plainly and give the paper to the priest to keep. It is not a "
+                    .. "surprise to anyone except the ones who might have expected otherwise, and you "
+                    .. "say the true reason out loud once, and then never again.",
+                deltas = { karma = 2, coin = -5, attr = { WIS = 1 } },
+            },
+            {
+                label = "Sell it while you can.",
+                warn = "risk",
+                text = "You take the coin and the coin is real, and the family have opinions about a "
+                    .. "house they did not visit being sold out from under a memory. You are comfortable "
+                    .. "at the end of a life spent not being, which is a strange shape for a reward, and "
+                    .. "you have decided to accept it.",
+                deltas = { coin = 60, karma = -2 },
+            },
+            {
+                label = "Change nothing.",
+                warn = "safe",
+                text = "The house stays yours and you keep knowing where the loose board is. Nothing is "
+                    .. "said and nothing is done and the question simply gets handed to whoever comes "
+                    .. "after, to have on whatever day it lands.",
+                deltas = { attr = { WIS = 1 } },
+            },
+        },
+    },
+
+    {
+        id = "R_SOMEONE_FROM_BEFORE",
+        title = "Someone From Before",
+        stage = "adulthood",
+        ageMin = 56,
+        ageMax = 999,
+        weight = 10,
+        repeatable = true,
+        cooldown = 6,
+        text = "You have not seen the face in forty years and you know it in less than a second, in a "
+            .. "market, over the price of onions.\n\nThere is a thing between you that was never settled "
+            .. "and that everyone involved has been letting lie. They have seen you too. They are "
+            .. "deciding what to do with their hands.",
+        choices = {
+            {
+                label = "Go over and say the thing.",
+                warn = "[CHA]",
+                check = { attr = "CHA", dc = 12 },
+                success = {
+                    text = "You say it badly and they hear it anyway. You end up standing between the "
+                        .. "stalls for the length of a long story about a brother you never met, and then "
+                        .. "you part, and the thing is not fixed, and it is settled.",
+                    deltas = { karma = 2, attr = { WIS = 1, CHA = 1 } },
+                },
+                failure = {
+                    text = "The words come out in the wrong order and land as an excuse, which is what "
+                        .. "they have been, partly, all along. They nod the way people nod at a stranger, "
+                        .. "and pick up their onions, and the thing stays where it was.",
+                    deltas = { attr = { WIS = 1 } },
+                },
+            },
+            {
+                label = "Let them not have seen you.",
+                warn = "safe",
+                text = "You look at the onions until they are done and gone. There is time, afterwards, "
+                    .. "to notice that this is the third time you have chosen the same way of handling "
+                    .. "it, and that the first two are both still in the room with you.",
+                deltas = { attr = { WIS = 1 }, karma = -1 },
+            },
+            {
+                label = "Buy their onions for them.",
+                warn = "risk",
+                text = "You pay the stall and walk off before they can refuse, which is the kind of "
+                    .. "gesture that cannot be answered. It settles nothing. It does mean that "
+                    .. "afterwards, when one of you is being remembered badly by somebody, the other "
+                    .. "one says less than they could.",
+                deltas = { coin = -8, karma = 1, attr = { LUK = 1 } },
+            },
+        },
+    },
+}
+
 local function statValue(state, key)
     if state.attrs and state.attrs[key] ~= nil then
         return state.attrs[key]
@@ -851,7 +1647,9 @@ end
 --- band, boosted 1.5x for race-specific content (design brief §4.3).
 function Events.weight(event, state)
     local weight = event.weight or 10
-    if event.ageMin and event.ageMax and event.ageMax > event.ageMin then
+    -- Repeatable generics are held apart by `cooldown` instead; trimming their
+    -- edges as well would only make the band's first and last years thinner.
+    if not event.repeatable and event.ageMin and event.ageMax and event.ageMax > event.ageMin then
         local span = event.ageMax - event.ageMin
         local into = (state.age or 0) - event.ageMin
         local edge = math.min(into, span - into)
@@ -867,17 +1665,42 @@ function Events.weight(event, state)
     return weight
 end
 
---- The pool this character can currently draw from, minus anything fired.
---- `chainOnly` events are never in the pool: they only fire from a chain.
-function Events.pool(state)
+--- The authored-tier pool: events that fire once a run and never again. These
+--- are the beats of a life, and one of them being eligible outranks any generic.
+function Events.authoredPool(state)
     local pool = {}
     for _, event in ipairs(Events.All) do
-        local fired = state.fired[event.id]
-        if not event.chainOnly and not (fired and not event.repeatable) then
+        if not event.chainOnly and not event.repeatable and not state.fired[event.id] then
             if Events.isEligible(event, state) then
                 table.insert(pool, event)
             end
         end
+    end
+    return pool
+end
+
+--- The repeatable tier for this age. Unless `ignoreCooldown` is set, an entry
+--- that fired within its cooldown window is not in the pool — which is the whole
+--- difference between texture and a loop.
+function Events.repeatablePool(state, ignoreCooldown)
+    local pool = {}
+    for _, event in ipairs(Events.Repeatable) do
+        if Events.isEligible(event, state) then
+            local last = state.firedAt and state.firedAt[event.id]
+            local cooldown = event.cooldown or Config.EventDraw.cooldownDefault
+            if ignoreCooldown or last == nil or (state.age or 0) - last >= cooldown then
+                table.insert(pool, event)
+            end
+        end
+    end
+    return pool
+end
+
+--- Everything this character can currently draw from: both tiers.
+function Events.pool(state)
+    local pool = Events.authoredPool(state)
+    for _, event in ipairs(Events.repeatablePool(state)) do
+        table.insert(pool, event)
     end
     return pool
 end
@@ -888,12 +1711,49 @@ function Events.byId(id)
             return event
         end
     end
+    for _, event in ipairs(Events.Repeatable) do
+        if event.id == id then
+            return event
+        end
+    end
     return nil
 end
 
---- Weighted draw. Returns nil when the pool is empty (a quiet year).
+--- The odds that a year the authored tier did not claim still offers a card.
+--- Bands come from Config.EventDraw; an age no band covers (infancy) is 0.
+function Events.cardChance(state)
+    local age = state.age or 0
+    for _, band in ipairs(Config.EventDraw.repeatChance) do
+        if age <= band.maxAge then
+            return band.chance
+        end
+    end
+    return 0
+end
+
+--- Weighted draw for one year. Returns nil for a quiet year — which is a line,
+--- not a blank, and is a deliberate outcome at every age.
+---
+--- Order: an eligible authored event wins the year outright; otherwise the
+--- repeatable tier gets one roll against the age band's chance; otherwise quiet.
+--- If every generic for this age is still cooling, the cooldown is relaxed to
+--- its coldest entry, so an adult year is never silent for want of content.
 function Events.draw(state, rng)
-    local pool = Events.pool(state)
+    local authored = Events.authoredPool(state)
+    if #authored > 0 then
+        return Rng.weighted(rng, authored, function(event)
+            return Events.weight(event, state)
+        end)
+    end
+
+    if not Rng.chance(rng, Events.cardChance(state)) then
+        return nil
+    end
+
+    local pool = Events.repeatablePool(state)
+    if #pool == 0 and Config.EventDraw.respectCooldownAsFloor then
+        pool = Events.repeatablePool(state, true)
+    end
     if #pool == 0 then
         return nil
     end
