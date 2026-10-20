@@ -509,14 +509,36 @@ local function renderCard(view)
     if view.phase == "event" and view.event then
         titleText = view.event.title
         bodyText = view.event.text
+        -- §5.1 fairness, made structural: a card that leads into a fight says so
+        -- in prose, and shows what losing costs and what health goes down the
+        -- hatch with you, BEFORE the player chooses.
+        if view.event.combat then
+            local block = view.event.combat
+            local lines = {}
+            if block.warning then
+                lines[#lines + 1] = block.warning
+            end
+            if block.stakes then
+                lines[#lines + 1] = block.stakes
+            end
+            lines[#lines + 1] = string.format(
+                "You would go in on %d of %d health.", block.health, block.healthMax
+            )
+            if block.lowHealth then
+                lines[#lines + 1] = block.lowHealth
+            end
+            bodyText = bodyText .. "\n\n" .. table.concat(lines, " ")
+        end
         for _, choice in ipairs(view.event.choices) do
             local label = choice.label
-            if choice.warn and choice.warn ~= "safe" then
+            if choice.startsCombat then
+                label = string.format("%s    [ FIGHT ]", choice.label)
+            elseif choice.warn and choice.warn ~= "safe" then
                 label = string.format("%s   %s", choice.label, choice.warn)
             end
             buttons[#buttons + 1] = {
                 text = label,
-                accent = choice.warn ~= "safe",
+                accent = choice.warn ~= "safe" or choice.startsCombat,
                 onClick = function()
                     send("choose", { index = choice.index })
                 end,
@@ -528,6 +550,16 @@ local function renderCard(view)
         noteText = view.outcome.check
         if view.outcome.chips and #view.outcome.chips > 0 then
             chipText = table.concat(view.outcome.chips, "    ")
+        end
+        -- A fight resolves the year, so its result belongs on the year's card.
+        if view.outcome.combat then
+            local c = view.outcome.combat
+            local tag = (c.result == "won" and "WON")
+                or (c.result == "fled" and "LEFT IT ALIVE")
+                or "LOST"
+            local line = string.format("%s after %d rounds · %d/%d health",
+                tag, c.rounds, c.health, c.healthMax)
+            chipText = chipText and (line .. "    " .. chipText) or line
         end
         buttons[#buttons + 1] = {
             text = "Continue",
@@ -831,20 +863,520 @@ local function renderDeath(view)
 end
 
 -- ===========================================================================
+-- Combat (§6.2) — the tactical screen
+--
+-- Every number here arrives inside view.combat, computed on the server: the
+-- projection on a button is the number the log will print. The client never
+-- rolls a die, never moves health and never works out a hit — pressing a
+-- button sends an intent and waits to be told what happened to it.
+--
+-- UI law (§6.1): the telegraph is the whole point of this screen. If something
+-- is winding up, it says so, and it says what the blow will cost and what
+-- Brace would save, BEFORE the player presses anything.
+-- ===========================================================================
+
+local combatFrame = UiKit.create("Frame", {
+    Name = "Combat",
+    Size = UDim2.fromScale(1, 1),
+    BackgroundColor3 = Theme.background,
+    BorderSizePixel = 0,
+    Visible = false,
+    ZIndex = 4,
+}, root)
+
+-- Selection is a view preference, not combat state: it only decides which
+-- target id rides along with the next intent.
+local selectedTargetId = nil
+local inspectOpen = {}
+local lastCombatView = nil
+local renderCombat -- forward: the panels re-render themselves on a click
+
+local function clearTargetIfDown(enemy)
+    if enemy.downed or enemy.fled then
+        if selectedTargetId == enemy.id then
+            selectedTargetId = nil
+        end
+    end
+end
+
+--- A track and a filled fraction of it, drawn once at the given value.
+local function fractionBar(parent, props, fraction, color)
+    local track = UiKit.create("Frame", props, parent)
+    UiKit.create("UICorner", { CornerRadius = UDim.new(1, 0) }, track)
+    local fill = UiKit.create("Frame", {
+        BackgroundColor3 = color,
+        BorderSizePixel = 0,
+        Size = UDim2.new(math.clamp(fraction or 0, 0, 1), 0, 1, 0),
+    }, track)
+    UiKit.create("UICorner", { CornerRadius = UDim.new(1, 0) }, fill)
+    return track
+end
+
+local function statusLine(parent, chips, position, width)
+    local text = "No conditions."
+    if chips and #chips > 0 then
+        local labels = {}
+        for _, chip in ipairs(chips) do
+            labels[#labels + 1] = chip.label
+        end
+        text = table.concat(labels, "  ·  ")
+    end
+    return UiKit.label(parent, {
+        Text = text,
+        Position = position,
+        Size = UDim2.new(width, 0, 0, 18),
+        TextSize = 13,
+        Font = UiKit.FontNumber,
+        TextColor3 = (chips and #chips > 0) and Theme.accent or Theme.textDim,
+        TextWrapped = true,
+    })
+end
+
+--- One enemy: name, health, the telegraph, its statuses, and the numbers the
+--- player needs to pick an action (armour/ward/damage type).
+local function renderEnemy(parent, enemy, order)
+    clearTargetIfDown(enemy)
+    local selected = selectedTargetId == enemy.id
+    local panel = UiKit.panel(parent, {
+        Name = "Enemy_" .. tostring(enemy.id),
+        Size = UDim2.new(1, 0, 0, 190),
+        LayoutOrder = order,
+        BackgroundColor3 = enemy.downed and Theme.panel or (selected and Theme.panelAlt or Theme.panel),
+    }, 12)
+    if selected then
+        UiKit.create("UIStroke", {
+            Thickness = 2,
+            Color = Theme.accent,
+        }, panel)
+    end
+
+    local heading = string.format("%s", enemy.name)
+    if enemy.downed then
+        heading = heading .. "  — down"
+    elseif enemy.fled then
+        heading = heading .. "  — gone"
+    end
+    UiKit.label(panel, {
+        Text = heading,
+        Size = UDim2.new(1, -110, 0, 24),
+        TextSize = 20,
+    })
+    UiKit.label(panel, {
+        Text = enemy.archetype or "",
+        Position = UDim2.new(1, -104, 0, 4),
+        Size = UDim2.new(0, 104, 0, 18),
+        TextSize = 12,
+        Font = UiKit.FontNumber,
+        TextColor3 = Theme.textDim,
+        TextXAlignment = Enum.TextXAlignment.Right,
+    })
+
+    -- Health, then the number itself: a bar the player has to guess at is decoration.
+    fractionBar(panel, {
+        Position = UDim2.new(0, 0, 0, 30),
+        Size = UDim2.new(1, -70, 0, 10),
+        BackgroundColor3 = Color3.fromRGB(12, 12, 15),
+        BorderSizePixel = 0,
+    }, enemy.healthFraction, Theme.healthFill)
+    UiKit.label(panel, {
+        Text = string.format("%d / %d", enemy.health, enemy.healthMax),
+        Position = UDim2.new(1, -66, 0, 26),
+        Size = UDim2.new(0, 66, 0, 18),
+        TextSize = 14,
+        Font = UiKit.FontNumber,
+        TextColor3 = Theme.text,
+        TextXAlignment = Enum.TextXAlignment.Right,
+    })
+
+    -- THE TELEGRAPH. Loud on purpose: this is what the fight is played on.
+    local y = 46
+    if enemy.telegraph then
+        local t = enemy.telegraph
+        local strip = UiKit.panel(panel, {
+            Position = UDim2.new(0, 0, 0, y),
+            Size = UDim2.new(1, 0, 0, 44),
+            BackgroundColor3 = Color3.fromRGB(52, 26, 24),
+        }, 6)
+        UiKit.label(strip, {
+            Text = string.format("%s — %s", t.label, t.detail),
+            Size = UDim2.new(1, 0, 0, 18),
+            TextSize = 16,
+            Font = Enum.Font.SourceSansBold,
+            TextColor3 = Theme.bad,
+        })
+        local cost = "It will hit you."
+        if t.incoming then
+            cost = string.format(
+                "Hits you for %d %s — %d if you Brace (saves %d).",
+                t.incoming.youTake, string.upper(t.incoming.damageType),
+                t.incoming.youTakeBraced, t.incoming.braceSaves
+            )
+        end
+        UiKit.label(strip, {
+            Text = cost,
+            Position = UDim2.new(0, 0, 0, 20),
+            Size = UDim2.new(1, 0, 0, 18),
+            TextSize = 13,
+            Font = UiKit.FontNumber,
+            TextColor3 = Theme.text,
+        })
+        y = y + 50
+    end
+
+    statusLine(panel, enemy.statuses, UDim2.new(0, 0, 0, y), 1)
+
+    UiKit.label(panel, {
+        Text = string.format("ARM %d   WARD %d   %s   threat %d",
+            enemy.armour, enemy.ward, string.upper(enemy.deals or ""), enemy.threat or 0),
+        Position = UDim2.new(0, 0, 1, -20),
+        Size = UDim2.new(1, -150, 0, 16),
+        TextSize = 12,
+        Font = UiKit.FontNumber,
+        TextColor3 = Theme.textDim,
+    })
+
+    if not enemy.downed and not enemy.fled then
+        UiKit.button(panel, {
+            Text = selected and "Targeted" or "Target",
+            Position = UDim2.new(1, -96, 1, -38),
+            Size = UDim2.new(0, 96, 0, 26),
+            TextSize = 13,
+            BackgroundColor3 = selected and Theme.accent or Theme.panelAlt,
+            TextColor3 = selected and Color3.fromRGB(26, 22, 14) or Theme.text,
+        }, function()
+            selectedTargetId = enemy.id
+            renderCombat(lastCombatView)
+        end)
+    end
+
+    if enemy.note then
+        UiKit.button(panel, {
+            Text = inspectOpen[enemy.id] and "Hide" or "Inspect",
+            Position = UDim2.new(1, -96, 0, 26),
+            Size = UDim2.new(0, 96, 0, 22),
+            TextSize = 12,
+            BackgroundColor3 = Theme.panel,
+        }, function()
+            inspectOpen[enemy.id] = not inspectOpen[enemy.id]
+            renderCombat(lastCombatView)
+        end)
+        if inspectOpen[enemy.id] then
+            UiKit.label(panel, {
+                Text = enemy.note,
+                Position = UDim2.new(0, 0, 0, 120),
+                Size = UDim2.new(1, -110, 0, 40),
+                TextSize = 13,
+                TextColor3 = Theme.textDim,
+                TextWrapped = true,
+            })
+        end
+    end
+end
+
+--- The action list. Each row carries its own cost and its own projected
+--- damage, so the player never has to guess what a button does.
+local function renderAction(parent, action, order, canAct)
+    local usable = action.enabled and canAct
+    local text = string.format("%s.  %s", action.key, action.label)
+    if action.cost and action.cost ~= "" then
+        text = string.format("%s   (%s)", text, action.cost)
+    end
+    if action.detail and action.detail ~= "" then
+        text = string.format("%s\n%s", text, action.detail)
+    end
+    if not usable and action.reason then
+        text = string.format("%s\nunavailable: %s", text, tostring(action.reason))
+    end
+    UiKit.button(parent, {
+        Text = text,
+        Size = UDim2.new(1, 0, 0, 46),
+        LayoutOrder = order,
+        TextSize = 14,
+        TextWrapped = true,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextYAlignment = Enum.TextYAlignment.Center,
+        BackgroundColor3 = usable and Theme.panelAlt or Theme.panel,
+        TextColor3 = usable and Theme.text or Theme.textDim,
+    }, function()
+        if not usable then
+            return
+        end
+        send("combatAction", { action = action.id, target = selectedTargetId })
+    end)
+end
+
+function renderCombat(view)
+    local combat = view and view.combat
+    if not combat then
+        return
+    end
+    lastCombatView = view
+    UiKit.clear(combatFrame)
+
+    local canAct = combat.awaitingAction and true or false
+
+    UiKit.label(combatFrame, {
+        Text = combat.title,
+        Position = UDim2.new(0, 24, 0, 12),
+        Size = UDim2.new(1, -340, 0, 30),
+        TextSize = 26,
+    })
+    UiKit.label(combatFrame, {
+        Text = string.format("%s    %s", combat.roundLabel, combat.order),
+        Position = UDim2.new(1, -320, 0, 18),
+        Size = UDim2.new(0, 296, 0, 20),
+        TextSize = 14,
+        Font = UiKit.FontNumber,
+        TextColor3 = Theme.textDim,
+        TextXAlignment = Enum.TextXAlignment.Right,
+    })
+
+    -- The one line that keeps the tactical loop honest across the whole panel.
+    local winding = nil
+    for _, enemy in ipairs(combat.enemies) do
+        if enemy.telegraph then
+            winding = enemy
+            break
+        end
+    end
+    if winding then
+        local t = winding.telegraph
+        local message = string.format(
+            "%s IS WINDING UP — %s lands %s.",
+            string.upper(winding.name), t.label, t.detail
+        )
+        if t.incoming then
+            message = string.format("%s  Brace now: %d instead of %d.",
+                message, t.incoming.youTakeBraced, t.incoming.youTake)
+        end
+        UiKit.label(combatFrame, {
+            Text = message,
+            Position = UDim2.new(0, 24, 0, 48),
+            Size = UDim2.new(1, -48, 0, 22),
+            TextSize = 16,
+            Font = Enum.Font.SourceSansBold,
+            TextColor3 = Theme.bad,
+        })
+    end
+
+    -- ---------------------------------------------------------------- enemies
+    local enemyColumn = UiKit.create("ScrollingFrame", {
+        Name = "Enemies",
+        Position = UDim2.new(0, 24, 0, 82),
+        Size = UDim2.new(1, -560, 1, -106),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        ScrollBarThickness = 4,
+        CanvasSize = UDim2.new(0, 0, 0, 0),
+        AutomaticCanvasSize = Enum.AutomaticSize.Y,
+    }, combatFrame)
+    UiKit.create("UIListLayout", {
+        FillDirection = Enum.FillDirection.Vertical,
+        SortOrder = Enum.SortOrder.LayoutOrder,
+        Padding = UDim.new(0, 8),
+    }, enemyColumn)
+    local order = 1
+    for _, enemy in ipairs(combat.enemies) do
+        renderEnemy(enemyColumn, enemy, order)
+        order += 1
+    end
+
+    -- ---------------------------------------------------------------- player
+    local right = UiKit.create("Frame", {
+        Name = "PlayerSide",
+        Position = UDim2.new(1, -512, 0, 82),
+        Size = UDim2.new(0, 488, 1, -106),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+    }, combatFrame)
+
+    local panel = UiKit.panel(right, {
+        Size = UDim2.new(1, 0, 0, 172),
+    }, 12)
+    UiKit.label(panel, {
+        Text = string.format("%s   ·   level %d %s", combat.player.name, combat.player.level,
+            combat.player.vocation or ""),
+        Size = UDim2.new(1, -110, 0, 22),
+        TextSize = 18,
+    })
+    if combat.player.wounded then
+        UiKit.label(panel, {
+            Text = "WOUNDED −25% DEALT",
+            Position = UDim2.new(1, -120, 0, 2),
+            Size = UDim2.new(0, 120, 0, 18),
+            TextSize = 13,
+            Font = UiKit.FontNumber,
+            TextColor3 = Theme.bad,
+            TextXAlignment = Enum.TextXAlignment.Right,
+        })
+    end
+
+    fractionBar(panel, {
+        Position = UDim2.new(0, 0, 0, 28),
+        Size = UDim2.new(1, -90, 0, 12),
+        BackgroundColor3 = Color3.fromRGB(12, 12, 15),
+        BorderSizePixel = 0,
+    }, combat.player.healthFraction, Theme.healthFill)
+    UiKit.label(panel, {
+        Text = string.format("%d / %d", combat.player.health, combat.player.healthMax),
+        Position = UDim2.new(1, -86, 0, 24),
+        Size = UDim2.new(0, 86, 0, 18),
+        TextSize = 14,
+        Font = UiKit.FontNumber,
+        TextXAlignment = Enum.TextXAlignment.Right,
+    })
+
+    fractionBar(panel, {
+        Position = UDim2.new(0, 0, 0, 48),
+        Size = UDim2.new(1, -90, 0, 8),
+        BackgroundColor3 = Color3.fromRGB(12, 12, 15),
+        BorderSizePixel = 0,
+    }, combat.player.manaMax > 0 and (combat.player.mana / combat.player.manaMax) or 0, Theme.expFill)
+    UiKit.label(panel, {
+        Text = string.format("%d / %d mana  (+%d a round)", combat.player.mana,
+            combat.player.manaMax, combat.player.manaRegen or 0),
+        Position = UDim2.new(0, 0, 0, 58),
+        Size = UDim2.new(1, 0, 0, 18),
+        TextSize = 13,
+        Font = UiKit.FontNumber,
+        TextColor3 = Theme.textDim,
+    })
+
+    statusLine(panel, combat.player.statuses, UDim2.new(0, 0, 0, 80), 1)
+    UiKit.label(panel, {
+        Text = string.format("ARM %d   WARD %d   crit %d%%   dodge %d%%   %s",
+            combat.player.armour, combat.player.ward, combat.player.crit, combat.player.dodge,
+            combat.player.weapon or "unarmed"),
+        Position = UDim2.new(0, 0, 0, 104),
+        Size = UDim2.new(1, 0, 0, 16),
+        TextSize = 12,
+        Font = UiKit.FontNumber,
+        TextColor3 = Theme.textDim,
+    })
+    if combat.warning then
+        UiKit.label(panel, {
+            Text = combat.warning,
+            Position = UDim2.new(0, 0, 0, 124),
+            Size = UDim2.new(1, 0, 0, 38),
+            TextSize = 12,
+            TextColor3 = Theme.textDim,
+            TextWrapped = true,
+        })
+    end
+
+    -- ---------------------------------------------------------------- actions
+    UiKit.label(right, {
+        Text = canAct and "ACTIONS" or "WAITING",
+        Position = UDim2.new(0, 0, 0, 180),
+        Size = UDim2.new(1, 0, 0, 18),
+        TextSize = 13,
+        Font = UiKit.FontNumber,
+        TextColor3 = Theme.textDim,
+    })
+    local actionArea = UiKit.create("ScrollingFrame", {
+        Name = "Actions",
+        Position = UDim2.new(0, 0, 0, 202),
+        Size = UDim2.new(1, 0, 1, -202 - 178),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        ScrollBarThickness = 4,
+        CanvasSize = UDim2.new(0, 0, 0, 0),
+        AutomaticCanvasSize = Enum.AutomaticSize.Y,
+    }, right)
+    UiKit.create("UIListLayout", {
+        FillDirection = Enum.FillDirection.Vertical,
+        SortOrder = Enum.SortOrder.LayoutOrder,
+        Padding = UDim.new(0, 6),
+    }, actionArea)
+
+    local actionOrder = 1
+    for _, action in ipairs(combat.actions) do
+        renderAction(actionArea, action, actionOrder, canAct)
+        actionOrder += 1
+    end
+
+    -- Fortune is a per-fight resource and never an action (§1.2), so it sits
+    -- apart from the turn list.
+    if combat.player.fortune and combat.player.fortune > 0 or combat.player.fortuneArmed then
+        UiKit.button(actionArea, {
+            Text = combat.player.fortuneArmed
+                and "FORTUNE — armed. The next die rolled against you is rerolled."
+                or string.format("FORTUNE (%d left) — reroll the next die rolled against you. Not a turn.",
+                    combat.player.fortune or 0),
+            Size = UDim2.new(1, 0, 0, 34),
+            LayoutOrder = actionOrder,
+            TextSize = 13,
+            TextWrapped = true,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            BackgroundColor3 = combat.player.fortuneArmed and Theme.accent or Theme.panel,
+            TextColor3 = combat.player.fortuneArmed and Color3.fromRGB(26, 22, 14) or Theme.accent,
+        }, function()
+            if combat.player.fortuneArmed then
+                return
+            end
+            send("combatAction", { action = "fortune" })
+        end)
+    end
+
+    -- ------------------------------------------------------------------- log
+    local logPanel = UiKit.panel(right, {
+        Name = "Log",
+        Position = UDim2.new(0, 0, 1, -170),
+        Size = UDim2.new(1, 0, 0, 170),
+    }, 10)
+    UiKit.label(logPanel, {
+        Text = "WHAT JUST HAPPENED",
+        Size = UDim2.new(1, 0, 0, 14),
+        TextSize = 11,
+        Font = UiKit.FontNumber,
+        TextColor3 = Theme.textDim,
+    })
+    local logList = UiKit.create("ScrollingFrame", {
+        Position = UDim2.new(0, 0, 0, 16),
+        Size = UDim2.new(1, 0, 1, -16),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        ScrollBarThickness = 4,
+        CanvasSize = UDim2.new(0, 0, 0, 0),
+        AutomaticCanvasSize = Enum.AutomaticSize.Y,
+    }, logPanel)
+    UiKit.create("UIListLayout", {
+        FillDirection = Enum.FillDirection.Vertical,
+        SortOrder = Enum.SortOrder.LayoutOrder,
+        Padding = UDim.new(0, 1),
+    }, logList)
+    local logOrder = 1
+    for _, line in ipairs(combat.log or {}) do
+        local dim = string.sub(line, 1, 4) == "    "
+        UiKit.label(logList, {
+            Text = line,
+            Size = UDim2.new(1, -8, 0, 15),
+            LayoutOrder = logOrder,
+            TextSize = 12,
+            Font = UiKit.FontNumber,
+            TextColor3 = dim and Theme.textDim or Theme.text,
+        })
+        logOrder += 1
+    end
+end
+
+-- ===========================================================================
 -- One render function, driven entirely by the server's view model
 -- ===========================================================================
 
 local function render(view)
     local creating = view.phase == "create"
     local dead = view.phase == "dead"
+    local fighting = view.phase == "combat" and view.combat ~= nil
 
     createFrame.Visible = creating
     deathFrame.Visible = dead
+    combatFrame.Visible = fighting
 
     topBar.Visible = not creating
-    rail.Visible = true
-    card.Visible = not creating and not dead
-    ageUpButton.Visible = not creating and not dead
+    rail.Visible = not fighting
+    card.Visible = not creating and not dead and not fighting
+    ageUpButton.Visible = not creating and not dead and not fighting
 
     if creating then
         renderCreate(view)
@@ -852,6 +1384,11 @@ local function render(view)
         renderTopBar(view)
         renderRail(view)
         renderDeath(view)
+    elseif fighting then
+        -- The fight owns the screen: no rail, no event card, no Age Up while
+        -- there is something in the cellar waiting to take its turn.
+        renderTopBar(view)
+        renderCombat(view)
     else
         renderTopBar(view)
         renderRail(view)

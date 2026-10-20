@@ -23,7 +23,6 @@
 
 local CombatData = require(script.Parent.CombatData)
 local Config = require(script.Parent.Config)
-local Rng = require(script.Parent.Rng)
 local Attributes = require(script.Parent.Attributes)
 
 local Combat = {}
@@ -286,14 +285,21 @@ end
 --- Raw damage before anything else (pipeline step 4).
 function Combat.rawDamage(attacker, skill)
     if skill.raw then
-        return skill.raw
+        return tonumber(skill.raw) or 0
     end
-    local statValue = (attacker.attrs and skill.stat and attacker.attrs[skill.stat]) or 0
-    local power = skill.power or 0
+    -- Every one of these is a table lookup on unauthored-shape data, so each is
+    -- coerced: a typo in CombatData (`stat = "Strenght"`) must yield 0 damage
+    -- from that term, not a string that poisons the arithmetic four steps later
+    -- in math.floor. luau-analyze caught exactly this hole; it was right.
+    local statValue = 0
+    if attacker.attrs and skill.stat then
+        statValue = tonumber(attacker.attrs[skill.stat]) or 0
+    end
+    local power = tonumber(skill.power) or 0
     if skill.powerFrom and attacker.gear then
-        power = attacker.gear[skill.powerFrom] or 0
+        power = tonumber(attacker.gear[skill.powerFrom]) or 0
     end
-    return statValue * (skill.coef or 1) + power
+    return statValue * (tonumber(skill.coef) or 1) + power
 end
 
 --- The defence a damage type runs into, and its name for the log (step 5).
@@ -438,7 +444,11 @@ function Combat:applyStatus(target, statusId, source)
     if resistAttr and target.attrs and target.attrs[resistAttr] then
         local resist = Attributes.resist(target.attrs[resistAttr])
         if resist > 0 then
-            local roll = self:rollD100({ againstPlayer = target.side == "player" and false or true })
+            -- Fortune rerolls a die rolled AGAINST the player, never one rolled
+            -- for them. `x and false or true` is always true in Lua, so this
+            -- used to arm on the player's own resist roll too and burn the
+            -- reroll on a result already in their favour.
+            local roll = self:rollD100({ againstPlayer = target.side ~= "player" })
             if roll <= resist then
                 resisted = true
                 self:logLine(string.format(
@@ -597,7 +607,6 @@ function Combat:attack(attacker, target, skill)
     target.health -= damage
 
     local typeName = (CombatData.DamageTypes[calc.damageType] or {}).name or string.upper(calc.damageType)
-    local who = self:nameOf(attacker)
     local whoTarget = self:nameOf(target)
     local critNote = isCrit and " CRITICAL" or ""
     if attacker.side == "player" then
@@ -1113,6 +1122,25 @@ function Combat:statusChips(unit)
     return chips
 end
 
+--- What a blow would actually cost YOU, unbraced and braced (§6.1 law: the
+--- player must be able to tell whether the next hit hurts more BEFORE pressing
+--- anything). Read-only — the braced case is probed through a stand-in that
+--- inherits every field from the live unit, so no combat state is touched.
+function Combat:probeIncoming(attacker, skill)
+    if not skill then
+        return nil
+    end
+    local braced = setmetatable({ braceActive = true }, { __index = self.player })
+    local plain = Combat.calculateDamage(attacker, self.player, skill).damage
+    local guarded = Combat.calculateDamage(attacker, braced, skill).damage
+    return {
+        damageType = skill.damageType or "physical",
+        youTake = plain,
+        youTakeBraced = guarded,
+        braceSaves = math.max(0, plain - guarded),
+    }
+end
+
 --- One enemy, as the panel needs it (§6.2).
 function Combat:enemyView(unit)
     local telegraph = nil
@@ -1125,6 +1153,7 @@ function Combat:enemyView(unit)
             damageType = skill.damageType,
             raw = skill.raw,
             firesThisRound = firesThisRound,
+            incoming = self:probeIncoming(unit, skill),
         }
     end
     return {

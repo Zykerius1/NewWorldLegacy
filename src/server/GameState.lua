@@ -1046,6 +1046,12 @@ function GameState:view()
     if self.phase == "outcome" and self.outcome then
         view.outcome = self.outcome
     end
+    -- Combat (§6.2): the whole panel, as data, built server-side. The client
+    -- draws it and sends intents back; it never computes a number of its own,
+    -- so the projected damage on a button is the damage the log will print.
+    if self.phase == "combat" and self.combat then
+        view.combat = self.combat:view()
+    end
 
     if self.phase == "dead" then
         view.death = {
