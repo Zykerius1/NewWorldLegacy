@@ -174,7 +174,7 @@ CombatData.Skills = {
 		name = "Bite",
 		kind = "attack",
 		damageType = "physical",
-		raw = 18, -- §3.10: basic attack 18 raw
+		raw = 20, -- TUNING: was 18 (§3.10)
 		targets = "one",
 	},
 	gnaw = {
@@ -182,7 +182,7 @@ CombatData.Skills = {
 		name = "Gnaw",
 		kind = "attack",
 		damageType = "physical",
-		raw = 30, -- §3.10: Gnaw 30 raw
+		raw = 56, -- TUNING: was 30. The telegraphed blow; unbraced it is half your life.
 		charged = true,
 		targets = "one",
 	},
@@ -191,7 +191,7 @@ CombatData.Skills = {
 		name = "Bite",
 		kind = "attack",
 		damageType = "physical",
-		raw = 7, -- §3.10: two attacks, 7 raw each
+		raw = 6, -- TUNING: was 7. Two attacks, 6 raw each.
 		targets = "one",
 	},
 	reposition = {
@@ -270,8 +270,8 @@ CombatData.Archetypes = {
 		name = "Barrow Rat",
 		kind = "BEAST",
 		tier = 1,
-		health = 80, -- §3.10
-		armour = 20, -- §3.10
+		health = 48, -- TUNING: was 80 (§3.10)
+		armour = 12, -- TUNING: was 20 (§3.10)
 		ward = 5, -- §3.10
 		dodge = 7, -- §3.10
 		crit = 7, -- §3.10
@@ -280,6 +280,10 @@ CombatData.Archetypes = {
 		damageType = "physical",
 		note = "Slow, and it means it. Watch for the plant of its feet.",
 		pattern = { "rat_bite", "rat_bite", "CHARGE:gnaw" },
+		-- TUNING: every round it stays standing it hits 12% harder. Leaving the
+		-- big one up is a choice with a price, which is what stops "stand still
+		-- and guard" from being the best answer to every fight.
+		ramp = 0.12,
 	},
 	-- C — CASTER: low health, high Ward, weak in melee, applies Burn/Weaken/Bind.
 	-- Authored in step 2 but NEVER PLACED (§4.1 #2, §4.2) — it exists to prove
@@ -326,8 +330,8 @@ CombatData.Archetypes = {
 		name = "Rat Swarm",
 		kind = "BEAST",
 		tier = 1,
-		health = 30, -- §3.10
-		armour = 8, -- §3.10
+		health = 24, -- TUNING: was 30 (§3.10)
+		armour = 6, -- TUNING: was 8 (§3.10)
 		ward = 2, -- §3.10
 		dodge = 13, -- §3.10
 		crit = 15, -- §3.10
@@ -348,7 +352,7 @@ CombatData.Archetypes = {
 
 CombatData.PlayerLoadout = {
 	gear = {
-		weaponPower = 8, -- iron hatchet, §3.10
+		weaponPower = 9, -- TUNING: was 8. Iron hatchet; see TUNING block below.
 		armour = 6, -- leather, §3.10
 		ward = 0,
 		focusPower = 0,
@@ -381,6 +385,16 @@ CombatData.Encounters = {
 		lossSeverity = "defeat",
 		cornered = false,
 		sourceTier = 0, -- loot table tier hook (§2.4); loot itself is step 2.5
+		-- TUNING: this fight can be SURVIVED, not only won. Hold six rounds and
+		-- the rats have had enough of you, and enough grain to be going on with:
+		-- a partial win (the contract and the coin, not the tails). This is what
+		-- makes Brace a plan instead of a slower way to lose.
+		standoff = {
+			round = 6,
+			text = "Six rounds of this and they have had enough. The swarm breaks "
+				.. "for the hole under the boards and the big one follows it, "
+				.. "grudging every step. What is left of the grain is yours.",
+		},
 		warning = "Something has been in the granary for a month, and it is bigger "
 			.. "than the hole it came through.",
 		stakes = "If you go down here you wake up robbed, not dead — the rats want the "

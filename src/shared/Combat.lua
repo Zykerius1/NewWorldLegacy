@@ -119,6 +119,9 @@ function Combat.enemyUnit(archetypeId, instanceId)
         damageType = def.damageType,
         note = def.note,
         flee = def.flee,
+        -- How much this enemy's blows grow per round it stays standing
+        -- (+10% raw per round at 0.10). 0 means it never gets worse.
+        ramp = def.ramp or 0,
     }
     unit.threat = Combat.threat(unit)
     return unit
@@ -154,6 +157,14 @@ function Combat.new(rng, playerSpec, encounter)
     self.warning = encounter.warning
     self.stakes = encounter.stakes
     self.sourceTier = encounter.sourceTier or 0
+    -- Standoff (§3.10): a fight that can be SURVIVED rather than only won, so
+    -- that holding the line is a real plan and not a slow way to lose. The
+    -- round and the wording live on the encounter, never here.
+    self.standoff = encounter.standoff
+    -- Which unit-turn we are on. Used to decide whether a control status
+    -- applied during a unit's OWN turn has had its one turn yet (see
+    -- Combat:decayStatuses and Config.Combat.staggerSurvivesOwnTurn).
+    self.turnSerial = 0
     self.round = 0
     self.status = "active" -- active | won | fled | lost
     self.awaitingPlayer = false
@@ -336,6 +347,11 @@ function Combat.dealtMultiplier(unit)
     local mult = 1
     if Combat.isWounded(unit) then
         mult *= Config.Combat.woundedDamageMultiplier
+    end
+    -- Ramp: an enemy that has been left standing gets angrier (§3.8). Set on
+    -- the enemy's turn by Combat:enemyTurn; 1 otherwise.
+    if unit.rampMult and unit.rampMult ~= 1 then
+        mult *= unit.rampMult
     end
     for _, status in ipairs(unit.statuses) do
         local def = CombatData.Statuses[status.id]
@@ -542,6 +558,11 @@ function Combat:decayStatuses(unit)
     for _, status in ipairs(unit.statuses) do
         if status.derived then
             kept[#kept + 1] = status
+        elseif Config.Combat.staggerSurvivesOwnTurn
+            and status.appliedSerial ~= nil and status.appliedSerial == self.turnSerial then
+            -- It arrived during this unit's own turn and has not cost it a
+            -- turn yet. It keeps its full duration and decays next round.
+            kept[#kept + 1] = status
         else
             status.duration -= 1
             if status.duration > 0 then
@@ -673,6 +694,10 @@ function Combat:applyStagger(unit)
         name = CombatData.Statuses.stagger.name,
         category = "control",
         duration = 1,
+        -- The turn it arrived on. A Stagger that lands on the victim's own
+        -- turn has not cost it anything YET, so it must survive that turn's
+        -- decay to be worth the next one (Config.Combat.staggerSurvivesOwnTurn).
+        appliedSerial = self.turnSerial,
     }
 end
 
@@ -766,8 +791,10 @@ function Combat:step()
         if not unit or unit.health <= 0 or unit.fled then
             -- skip
         elseif unit.side == "player" then
+            self.turnSerial += 1
             self:beginPlayerTurn(unit)
         else
+            self.turnSerial += 1
             self:enemyTurn(unit)
         end
     end
@@ -795,6 +822,16 @@ function Combat:checkEnd()
         self.partial = anyFled
         self:logLine(anyFled and "The rest of it breaks apart and goes. The job is half done."
             or "It stops moving.")
+        return true
+    end
+    -- Standoff (§3.10): some fights are about how long you stand, not how many
+    -- you put down. If the encounter says so, outlasting the round is a win.
+    if self.standoff and self.round > (self.standoff.round or math.huge) then
+        self.status = "won"
+        self.partial = true
+        self.standoffEnded = true
+        self:logLine(self.standoff.text
+            or "They have had enough of this. The rest of them go, and they do not look back.")
         return true
     end
     if self.round > Config.Combat.maxRounds then
@@ -836,6 +873,12 @@ function Combat:enemyTurn(unit)
     self:tickStatuses(unit)
     if unit.health <= 0 then
         return
+    end
+
+    -- Ramp (§3.8): a fight the player lets run gets worse. Set here so every
+    -- blow this turn — basic, charged or not — carries it.
+    if (unit.ramp or 0) > 0 then
+        unit.rampMult = 1 + unit.ramp * math.max(0, self.round - 1)
     end
 
     -- A hurt skirmisher would rather leave (§3.8).

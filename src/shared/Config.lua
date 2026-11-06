@@ -309,6 +309,11 @@ Config.Combat = {
     braceManaMultiplier = 2, -- plus ManaRegen × 2
     braceInterruptsCharged = true,
     braceStaggersAttacker = true,
+    -- A Stagger that lands on the victim's OWN turn has not cost it anything
+    -- yet, so it must survive that turn's decay or Brace's whole payoff — "the
+    -- attacker loses their next action" — silently evaporates and Brace becomes
+    -- a trap. This is the flag that makes the guard worth a turn.
+    staggerSurvivesOwnTurn = true,
 
     -- Crit (§2.1). Crit RATE is on DEX; crit DAMAGE lives on gear and is a
     -- placeholder here until step 2.5 (decision 1 of the four).
