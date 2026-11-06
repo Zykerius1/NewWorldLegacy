@@ -174,7 +174,7 @@ CombatData.Skills = {
 		name = "Bite",
 		kind = "attack",
 		damageType = "physical",
-		raw = 20, -- TUNING: was 18 (§3.10)
+		raw = 14, -- TUNING: was 18 (§3.10)
 		targets = "one",
 	},
 	gnaw = {
@@ -182,7 +182,7 @@ CombatData.Skills = {
 		name = "Gnaw",
 		kind = "attack",
 		damageType = "physical",
-		raw = 56, -- TUNING: was 30. The telegraphed blow; unbraced it is half your life.
+		raw = 76, -- TUNING: was 30. The telegraphed blow; unbraced it is half your life.
 		charged = true,
 		targets = "one",
 	},
@@ -191,7 +191,7 @@ CombatData.Skills = {
 		name = "Bite",
 		kind = "attack",
 		damageType = "physical",
-		raw = 6, -- TUNING: was 7. Two attacks, 6 raw each.
+		raw = 4, -- TUNING: was 7. Two attacks, 6 raw each.
 		targets = "one",
 	},
 	reposition = {
@@ -270,7 +270,7 @@ CombatData.Archetypes = {
 		name = "Barrow Rat",
 		kind = "BEAST",
 		tier = 1,
-		health = 48, -- TUNING: was 80 (§3.10)
+		health = 56, -- TUNING: was 80 (§3.10)
 		armour = 12, -- TUNING: was 20 (§3.10)
 		ward = 5, -- §3.10
 		dodge = 7, -- §3.10
@@ -390,10 +390,11 @@ CombatData.Encounters = {
 		-- a partial win (the contract and the coin, not the tails). This is what
 		-- makes Brace a plan instead of a slower way to lose.
 		standoff = {
-			round = 6,
-			text = "Six rounds of this and they have had enough. The swarm breaks "
+			round = 10,
+			text = "Ten rounds of this and they have had enough. The swarm breaks "
 				.. "for the hole under the boards and the big one follows it, "
-				.. "grudging every step. What is left of the grain is yours.",
+				.. "grudging every step. You are still standing, which is all it was "
+                                .. "ever going to take. What is left of the grain is yours.",
 		},
 		warning = "Something has been in the granary for a month, and it is bigger "
 			.. "than the hole it came through.",
