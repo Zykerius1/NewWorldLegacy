@@ -775,6 +775,90 @@ Events.All = {
             },
         },
     },
+
+    ------------------------------------------------------------- into a fight
+    -- The card that leads into turn-based combat (§5.1). The fight is the
+    -- RESOLUTION of this year's decision, so combat does not spend a year. The
+    -- `combat` block is shown on the card before the player commits: what is
+    -- down there, what losing costs, and the health they would be taking in.
+    {
+        id = "E_GRANARY_CELLAR",
+        title = "The Count",
+        stage = "adulthood",
+        ageMin = 17,
+        ageMax = 34,
+        weight = 20,
+        text = "The keeper of the granary has counted the sacks eleven times, and the number is the "
+            .. "same every time, and it is wrong. He does not say rats. He says the floor.\n\nWhere the "
+            .. "floor meets the wall there is a hole, and the grain around it has been eaten clean in a "
+            .. "cone, the way something serious eats and not the way vermin do. He offers you the guild's "
+            .. "rate less a little for the inconvenience of being asked, which is how you know he has "
+            .. "already asked somebody else. The hatch is up on its ring while he is still talking. He is "
+            .. "standing well back from it.",
+        combat = {
+            encounter = "ENC_GRANARY_JOB",
+            severity = "defeat",
+            warning = "The hole is wider than the keeper's fist, and the floorboards about it are soft. "
+                .. "Whatever is under the grain has been eating well for a month.",
+            stakes = "Nothing down there has any use for you dead. If it goes badly you will wake up on "
+                .. "the floor with a lighter purse and ribs that will not be quiet for a while.",
+            onWin = {
+                text = "You come up the ladder with a tail in your fist and a smell in your clothes that "
+                    .. "will take a season to leave. The keeper counts the sacks again with you standing "
+                    .. "there, and this time the number is right, and he pays you in the yard where the "
+                    .. "neighbours can see it happen, which is worth more to him than the coin.",
+                deltas = { notoriety = 3 },
+            },
+            onLose = {
+                text = "You do not remember the ladder. You remember the granary floor and the keeper's "
+                    .. "boots and his voice going over you to somebody else, about what the guild owes for "
+                    .. "this and who is going to carry you. Your purse is lighter than it should be and he "
+                    .. "does not look at you when you leave.",
+                severity = "defeat",
+            },
+            onFlee = {
+                text = "You come out of the hatch without the lamp and without the coin, and the keeper "
+                    .. "does not argue. The way he does not argue is the whole of it. By the time it is "
+                    .. "told in the yard it is no longer a story about rats.",
+            },
+        },
+        choices = {
+            {
+                label = "Go down and clear it.",
+                warn = "[risk]",
+                startsCombat = true,
+                text = "You take the lamp down first. The hatchet is no use in the dark.",
+            },
+            {
+                label = "Tell him it is the mason's work, not yours.",
+                warn = "safe",
+                text = "You tell him what any mason would tell him, which is the truth, and it is not the "
+                    .. "answer he paid a morning of his own time to get. He gives you something for the "
+                    .. "walk. The hole is still there when you go past the granary the following year, and "
+                    .. "there is a board over it, and the board is doing nothing.",
+                deltas = { coin = 6, attr = { WIS = 1 } },
+            },
+            {
+                label = "Smoke them out from above.",
+                warn = "[INT]",
+                check = { attr = "INT", dc = 12 },
+                success = {
+                    text = "You bank the straw at the hatch and keep the fire small and feed it until the "
+                        .. "cellar gives up its air. Nothing comes out the hole. What comes out is a smell "
+                        .. "you will recognise for the rest of your life, and eleven sacks that are still "
+                        .. "worth money, and a keeper who tells the story better than you do.",
+                    deltas = { coin = 45, exp = 45, attr = { INT = 1 }, flags = { "smoked_the_cellar" } },
+                },
+                failure = {
+                    text = "The straw takes faster than you meant it to and gets into the joists, and for a "
+                        .. "quarter of an hour the granary is the most interesting thing in the street. The "
+                        .. "fire is put out. The grain nearest the hatch is not grain any more. He does not "
+                        .. "shout, which is worse, and you pay for the sacks out of what you have.",
+                    deltas = { coin = -25, karma = -1, attr = { WIS = 1 } },
+                },
+            },
+        },
+    },
 }
 
 -- ===========================================================================

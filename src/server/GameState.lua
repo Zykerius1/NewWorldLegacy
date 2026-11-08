@@ -22,6 +22,8 @@ local Attributes = require(Shared.Attributes)
 local Events = require(Shared.Events)
 local Rng = require(Shared.Rng)
 local Types = require(Shared.Types)
+local Combat = require(Shared.Combat)
+local CombatData = require(Shared.CombatData)
 
 local GameState = {}
 GameState.__index = GameState
@@ -73,6 +75,11 @@ local NOTABLE_CLAUSES = {
     the_fall = "fell on the sixth stair",
     kept_climbing = "kept climbing them",
     the_house_given = "gave the house away",
+    -- step 2: combat leaves marks (stat-model §5.4, §7.4)
+    did_the_granary_job = "cleared the granary and was paid by the tail",
+    failed_the_granary_contract = "failed a contract in a granary",
+    beaten_in_the_granary = "was beaten in a granary and kept the scars",
+    came_back_from_the_other_side = "was brought back from the other side, owing",
 }
 
 -- ===========================================================================
@@ -112,6 +119,19 @@ function GameState:reset()
     self.chainQueue = {}
     self.notable = {}
     self.history = {}
+
+    -- step 2: combat
+    self.combat = nil
+    self.combatContext = nil
+    self.combatRecord = nil
+    self.items = {}
+    self.inventory = {}
+    self.injuredUntilAge = nil
+    self.marks = {}
+    self.threat = nil
+    self.fights = 0
+    self.fightWins = 0
+    self.fightLosses = 0
 
     self.alive = true
     self.deathCause = nil
@@ -219,6 +239,18 @@ function GameState:begin()
     self.pendingEvent = nil
     self.outcome = nil
     self.quietLine = nil
+    -- Gear is stubbed for step 2 (stat-model §4.2): one oil flask is the only
+    -- item the first encounter knows about, and it is what the player carries.
+    self.items = {}
+    for id, count in pairs(CombatData.PlayerLoadout.items) do
+        self.items[id] = count
+    end
+    self.inventory = {}
+    self.injuredUntilAge = nil
+    self.marks = {}
+    self.fights = 0
+    self.fightWins = 0
+    self.fightLosses = 0
     self.yearLine = string.format("Born. %d coin in the house.", band.coin)
     self.phase = "play"
     return true
@@ -274,6 +306,18 @@ function GameState:ageUp()
         healthDrift = -Config.Year.healthDeclinePerYear
     elseif self.health < self.derived.healthMax then
         healthDrift = Config.Year.healthRegenBefore40
+        -- stat-model §5.5: a year restores 25% + VIT × 2% of max, if fed, housed
+        -- and not Wounded. Combat damage is life damage (§5.2), so this is what
+        -- makes a fighting life survivable at all. An unhealed wound halves it.
+        if Config.Combat.useFractionalRecovery then
+            local fraction = Config.Derived.restBaseFraction
+                + self.attrs.VIT * Config.Derived.restVitFraction
+            local recovering = math.floor(self.derived.healthMax * fraction)
+            if self.injuredUntilAge and self.age < self.injuredUntilAge then
+                recovering = math.floor(recovering * 0.5) -- TUNING: a wound slows it
+            end
+            healthDrift = math.max(healthDrift, recovering)
+        end
     end
     if healthDrift ~= 0 then
         self.health += healthDrift
@@ -408,6 +452,15 @@ function GameState:choose(index)
     local choice = type(index) == "number" and event.choices[index] or nil
     if not choice then
         return false, "bad_choice"
+    end
+
+    -- A choice can lead into a fight (§5.1). The fight IS the resolution of this
+    -- year's decision: the card was the preamble, and the aftermath becomes the
+    -- year's outcome paragraph. Combat does not consume a year.
+    if choice.startsCombat and event.combat then
+        self.pendingEvent = nil
+        self:enterCombat(event.combat.encounter, event.combat)
+        return true
     end
 
     local text, deltas, branch, checkLine
@@ -545,6 +598,263 @@ function GameState:continue()
 end
 
 -- ===========================================================================
+-- Combat — a fight is a MODE the year loop enters and leaves (§5.1)
+--
+-- The event card leads in, the fight resolves INSIDE the same year, and the
+-- aftermath is the year's outcome paragraph. Damage is life damage: there is
+-- one health pool (§5.2).
+-- ===========================================================================
+
+--- Wounded: below 30% of max health, or carrying a wound from a lost fight
+--- (§5.5). It is worth −25% damage dealt and it is visible on the main screen.
+function GameState:isWounded()
+    if self.injuredUntilAge and self.age < self.injuredUntilAge then
+        return true
+    end
+    if self.alive and self.derived and self.derived.healthMax > 0 then
+        return self.health <= self.derived.healthMax * Config.Combat.woundedThreshold
+    end
+    return false
+end
+
+--- The player's side of the fight, built from the real sheet (§4.1 #7).
+function GameState:combatSpec()
+    local gear = CombatData.PlayerLoadout.gear
+    return {
+        name = self.name,
+        level = self.level,
+        vocation = self:vocation(),
+        attrs = self.attrs,
+        health = self.health,
+        healthMax = self.derived.healthMax,
+        mana = self.mana,
+        manaMax = self.derived.manaMax,
+        manaRegen = self.derived.manaRegen,
+        gear = gear,
+        actions = CombatData.PlayerLoadout.actions,
+        items = self.items,
+        fortune = self.derived.fortune,
+        injured = self:isWounded(),
+        damageType = "physical",
+    }
+end
+
+--- Enter a fight. `encounter` may be an id (the game) or a table (the harness).
+--- `context` is the event's combat block: the prose for each exit (§5.1).
+function GameState:enterCombat(encounter, context)
+    local def = type(encounter) == "string" and CombatData.Encounters[encounter] or encounter
+    if not def then
+        return false, "unknown_encounter"
+    end
+    if self.phase ~= "play" and self.phase ~= "event" then
+        return false, "not_now"
+    end
+    if not self.attrs then
+        return false, "no_sheet"
+    end
+
+    -- The design rule, enforced in code: severity `dead` is never attached to a
+    -- fair fight (§5.4). If an encounter in data ever tries, say so loudly.
+    local severity = def.lossSeverity or "defeat"
+    if severity == "dead" and Config.Combat.forbidDeadOnWinnableFight and not def.explicitlyFatal then
+        warn(string.format(
+            "[NWL] encounter %s has lossSeverity='dead' on a fightable enemy. "
+            .. "Dead belongs to events, not to fights you can win (stat-model §5.4).",
+            tostring(def.id)
+        ))
+    end
+
+    self.health = math.max(1, self.health)
+    local fight = Combat.new(self.rng, self:combatSpec(), def)
+    fight:begin()
+    self.combat = fight
+    self.combatContext = context or {}
+    self.threat = fight.player.threat
+    self.fights += 1
+    self.phase = "combat"
+    self.pendingEvent = nil
+    self.history[#self.history + 1] = string.format("Age %d: %s (a fight)", self.age, fight.title)
+    if fight.status ~= "active" then
+        self:resolveCombat()
+    end
+    return true
+end
+
+--- The player's intent inside a fight: an action, or spending Fortune.
+--- Returns ok, reason.
+function GameState:combatAction(data)
+    if self.phase ~= "combat" or not self.combat then
+        return false, "no_fight"
+    end
+    local action = type(data) == "table" and data.action or nil
+    if action == "fortune" then
+        local ok, reason = self.combat:armFortune()
+        if not ok then
+            return false, reason
+        end
+        return true
+    end
+    if type(action) ~= "string" then
+        return false, "no_action"
+    end
+    local target = type(data) == "table" and data.target or nil
+    local ok, reason = self.combat:playerAction(action, target)
+    if not ok then
+        return false, reason
+    end
+    if self.combat.status ~= "active" then
+        self:resolveCombat()
+    end
+    return true
+end
+
+--- The fight is over. Work out what it cost, in the life sim's terms (§5.4).
+function GameState:resolveCombat()
+    local fight = self.combat
+    if not fight then
+        return false, "no_fight"
+    end
+    local context = self.combatContext or {}
+    local chips = {}
+    local text, severity
+    local summary = {
+        result = fight.status,
+        rounds = fight.round,
+        health = math.max(0, fight.player.health),
+        healthMax = fight.player.healthMax,
+        mana = math.floor(fight.player.mana),
+        manaMax = fight.player.manaMax,
+        enemies = {},
+        title = fight.title,
+        partial = fight.partial or false,
+    }
+    for _, enemy in ipairs(fight.enemies) do
+        summary.enemies[#summary.enemies + 1] = {
+            name = enemy.name,
+            downed = enemy.health <= 0,
+            fled = enemy.fled or false,
+            health = math.max(0, enemy.health),
+            healthMax = enemy.healthMax,
+        }
+    end
+    summary.log = {}
+    for index = math.max(1, #fight.log - 6), #fight.log do
+        summary.log[#summary.log + 1] = fight.log[index]
+    end
+
+    -- One health pool: whatever the fight left you on is what you are on (§5.2).
+    self.health = math.max(0, fight.player.health)
+    self.mana = math.max(0, fight.player.mana)
+    self.items = fight.player.items
+
+    if fight.status == "won" then
+        self.fightWins += 1
+        local reward = Config.Combat.VictoryReward
+        local win = context.onWin or {}
+        text = win.text or "The job is done and the guild pays by the tail."
+        self.coin = math.max(0, self.coin + reward.coin)
+        chips[#chips + 1] = string.format("+%d coin", reward.coin)
+        self:gainExp(reward.exp)
+        chips[#chips + 1] = string.format("+%d exp", Attributes.applyExpMultiplier(reward.exp, self.raceKey))
+        self.inventory[#self.inventory + 1] = reward.item
+        self.flags[reward.repFlag] = true
+        self.notable[#self.notable + 1] = NOTABLE_CLAUSES[reward.repFlag] or "did the job"
+        local applied = self:applyDeltas(win.deltas)
+        for _, chip in ipairs(applied) do
+            chips[#chips + 1] = chip
+        end
+        if summary.partial then
+            text = text .. " One of them got away, and the tail money is short for it."
+        end
+    elseif fight.status == "fled" then
+        local flee = context.onFlee or {}
+        text = flee.text
+            or "You get out. The contract does not: you are alive, unpaid, and known for leaving."
+        self.flags[Config.Combat.FleeCost.flag] = true
+        if not self.flags.failed_the_granary_contract then
+            self.flags.failed_the_granary_contract = true
+        end
+        self.notable[#self.notable + 1] = NOTABLE_CLAUSES.failed_the_granary_contract
+        local applied = self:applyDeltas(flee.deltas)
+        for _, chip in ipairs(applied) do
+            chips[#chips + 1] = chip
+        end
+    else
+        -- Lost. The severity comes from the encounter, never from a die (§5.4).
+        self.fightLosses += 1
+        local lose = context.onLose or {}
+        severity = lose.severity or fight.lossSeverity or "defeat"
+
+        if severity == Config.Combat.Severities.dead then
+            self:kill(lose.deathText or string.format("killed by %s", fight.title:lower()))
+            return true
+        end
+
+        if severity == Config.Combat.Severities.downed then
+            local cost = Config.Combat.DownedCost
+            self.health = math.max(1, math.floor(self.derived.healthMax * cost.healthFraction))
+            self.level = math.max(1, self.level - cost.levelsLost)
+            self.exp = math.min(self.exp, Attributes.expForLevel(self.level))
+            self:refreshDerived()
+            self.flags.resurrection_debt = true
+            self.flags.came_back_from_the_other_side = true
+            self.notable[#self.notable + 1] = NOTABLE_CLAUSES.came_back_from_the_other_side
+            text = lose.text or string.format(
+                "You wake on a table you did not pay for. %s", cost.debtText
+            )
+            chips[#chips + 1] = "level down"
+            chips[#chips + 1] = string.format("health %d", self.health)
+            -- The debt is a chain event years later (§5.4: obligation is the
+            -- most interesting cost and the cheapest to build).
+            table.insert(self.chainQueue, {
+                id = "E_DEBT_CALLED",
+                atAge = self.age + cost.debtYears + math.floor(self.rng:NextNumber() * 8),
+            })
+        else
+            local cost = Config.Combat.DefeatCost
+            local lost = math.floor(self.coin * cost.coinLossFraction)
+            self.coin = math.max(0, self.coin - lost)
+            self.health = cost.healthFloor
+            self.injuredUntilAge = self.age + cost.injuredYears
+            self.flags[cost.mark] = true
+            self.marks[#self.marks + 1] = cost.mark
+            self.notable[#self.notable + 1] = NOTABLE_CLAUSES[cost.mark] or "was beaten and kept the scars"
+            text = lose.text or string.format(
+                "You come round on the floor with your purse lighter by %d coin and your "
+                .. "ribs telling you something you will not hear from anyone else: they had "
+                .. "no reason to finish you, and they did not. You will be carrying this for "
+                .. "%d years.",
+                lost, cost.injuredYears
+            )
+            chips[#chips + 1] = string.format("-%d coin", lost)
+            chips[#chips + 1] = string.format("Wounded for %d years", cost.injuredYears)
+        end
+        local applied = self:applyDeltas(lose.deltas)
+        for _, chip in ipairs(applied) do
+            chips[#chips + 1] = chip
+        end
+    end
+
+    self.combatRecord = summary
+    self.outcome = {
+        eventTitle = fight.title,
+        text = text,
+        chips = chips,
+        combat = summary,
+    }
+    self.combat = nil
+    self.combatContext = nil
+    self:refreshDerived()
+    self.health = math.min(self.health, self.derived.healthMax)
+    if self.health <= 0 then
+        self:kill("wounds taken in a year that was otherwise ordinary")
+        return true
+    end
+    self.phase = "outcome"
+    return true
+end
+
+-- ===========================================================================
 -- Death
 -- ===========================================================================
 
@@ -645,8 +955,19 @@ function GameState:view()
             coin = self.coin,
             karma = self.karma,
             notoriety = self.notoriety,
+            wounded = self:isWounded(),
+            injuredUntilAge = self.injuredUntilAge,
+            threat = self.threat,
+            fights = self.fights,
+            items = self.items,
+            inventory = self.inventory,
+            marks = self.marks,
         },
     }
+
+    if self.phase == "combat" and self.combat then
+        view.combat = self.combat:view()
+    end
 
     if self.phase == "create" then
         local races = {}
@@ -693,6 +1014,7 @@ function GameState:view()
                 index = index,
                 label = choice.label,
                 warn = choice.warn,
+                startsCombat = choice.startsCombat or false,
             }
         end
         view.event = {
@@ -702,10 +1024,33 @@ function GameState:view()
             text = self.pendingEvent.text,
             choices = choices,
         }
+        -- The fairness rule made structural (§5.1): an event that leads to a
+        -- fight says so, in prose, before the player chooses — and the card
+        -- shows the health they would be taking in with them.
+        local block = self.pendingEvent.combat
+        if block then
+            view.event.combat = {
+                warning = block.warning or self.pendingEvent.combatWarning,
+                stakes = block.stakes,
+                severity = block.severity,
+                cornered = block.cornered or false,
+                health = self.health,
+                healthMax = self.derived.healthMax,
+                mana = self.mana,
+                lowHealth = (not block.severity or block.severity ~= "dead")
+                    and self:isWounded() and Config.Combat.lowHealthWarning or nil,
+            }
+        end
     end
 
     if self.phase == "outcome" and self.outcome then
         view.outcome = self.outcome
+    end
+    -- Combat (§6.2): the whole panel, as data, built server-side. The client
+    -- draws it and sends intents back; it never computes a number of its own,
+    -- so the projected damage on a button is the damage the log will print.
+    if self.phase == "combat" and self.combat then
+        view.combat = self.combat:view()
     end
 
     if self.phase == "dead" then
