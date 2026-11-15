@@ -347,12 +347,11 @@ function GameState:ageUp()
     self.health = math.min(self.health, self.derived.healthMax)
 
     -- 8. Death checks, before the card: a year can kill without a choice.
-    if self.health <= 0 then
-        self:kill("their body gave out")
+    if self:checkDeath() then
         return true
     end
     local naturalDeath = self:naturalDeathChance()
-    if self.age >= Config.Death.hardAgeLimit or (naturalDeath > 0 and Rng.chance(self.rng, naturalDeath)) then
+    if naturalDeath > 0 and Rng.chance(self.rng, naturalDeath) then
         self:kill("age")
         return true
     end
@@ -376,12 +375,32 @@ function GameState:ageUp()
     return true
 end
 
---- Chance of dying of age this year. Zero until the lifespan rolled at birth.
-function GameState:naturalDeathChance()
-    if not self.lifespan then
-        return 0
+--- The one gate a life ends through, whatever phase it is in. A body with no
+--- health left and a life past the hard age limit are both terminal: neither
+--- waits for the run to be back in `play`, so a life can never outlive the
+--- limit by sitting in a card or a fight.
+--- Returns true if the life ended here.
+function GameState:checkDeath()
+    if not self.alive then
+        return true
     end
-    local past = self.age - self.lifespan
+    if self.health <= 0 then
+        self:kill("their body gave out")
+        return true
+    end
+    if self.age >= Config.Death.hardAgeLimit then
+        self:kill("age")
+        return true
+    end
+    return false
+end
+
+--- Chance of dying of age this year. Zero until the lifespan rolled at birth.
+--- A missing lifespan is a bug, not immortality: fall back to the base lifespan
+--- so a life with no rolled span still grows old.
+function GameState:naturalDeathChance()
+    local lifespan = self.lifespan or Config.Death.lifespanBase
+    local past = self.age - lifespan
     if past <= Config.Death.naturalDeathGrace then
         return 0
     end
@@ -446,6 +465,10 @@ end
 function GameState:choose(index)
     if self.phase ~= "event" or not self.pendingEvent then
         return false, "no_event"
+    end
+    -- A life already past the hard limit ends here rather than being played on.
+    if self:checkDeath() then
+        return false, "dead"
     end
 
     local event = self.pendingEvent
@@ -593,6 +616,10 @@ function GameState:continue()
         return false, "not_resolving"
     end
     self.outcome = nil
+    -- Back to the year loop only if the life is still going.
+    if self:checkDeath() then
+        return true
+    end
     self.phase = "play"
     return true
 end
@@ -652,6 +679,10 @@ function GameState:enterCombat(encounter, context)
     if not self.attrs then
         return false, "no_sheet"
     end
+    -- Nobody fights on past the hard limit: the fight is not a way to stay alive.
+    if self:checkDeath() then
+        return false, "dead"
+    end
 
     -- The design rule, enforced in code: severity `dead` is never attached to a
     -- fair fight (§5.4). If an encounter in data ever tries, say so loudly.
@@ -685,6 +716,9 @@ end
 function GameState:combatAction(data)
     if self.phase ~= "combat" or not self.combat then
         return false, "no_fight"
+    end
+    if self:checkDeath() then
+        return false, "dead"
     end
     local action = type(data) == "table" and data.action or nil
     if action == "fortune" then
