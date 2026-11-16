@@ -625,11 +625,7 @@ local function renderCard(view)
     choicesFrame.Position = UDim2.new(0, 0, 1, -buttonArea)
     choicesFrame.Size = UDim2.new(1, 0, 0, buttonArea)
     UiKit.clear(choicesFrame)
-    UiKit.create("UIListLayout", {
-        FillDirection = Enum.FillDirection.Vertical,
-        SortOrder = Enum.SortOrder.LayoutOrder,
-        Padding = UDim.new(0, 8),
-    }, choicesFrame)
+    UiKit.ensureStack(choicesFrame, 8)
 
     for index, info in ipairs(buttons) do
         UiKit.button(choicesFrame, {

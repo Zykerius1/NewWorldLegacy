@@ -125,11 +125,42 @@ function UiKit.bar(parent, props, fillColor)
     end
 end
 
---- Remove every child, so a frame can be re-rendered from scratch.
+--- Objects that describe HOW a frame is laid out, not what is in it. A frame is
+--- built once with its layout attached, then re-rendered many times; destroying
+--- the layout on the first clear leaves every row stacked on top of the last,
+--- which is exactly what a screen full of overlapping text looks like.
+local STRUCTURAL = {
+    UIListLayout = true,
+    UIGridLayout = true,
+    UITableLayout = true,
+    UIPageLayout = true,
+    UIPadding = true,
+    UICorner = true,
+    UIStroke = true,
+    UIAspectRatioConstraint = true,
+    UISizeConstraint = true,
+}
+
+--- Remove every child, so a frame can be re-rendered from scratch — keeping the
+--- layout and padding objects that were attached to it when it was built.
 function UiKit.clear(instance)
     for _, child in ipairs(instance:GetChildren()) do
-        child:Destroy()
+        if not STRUCTURAL[child.ClassName] then
+            child:Destroy()
+        end
     end
+end
+
+--- The frame's vertical stack, creating it only if it is not already there.
+--- Frames survive re-rendering and clear() keeps their layout, so adding one
+--- unconditionally would leave a second UIListLayout behind on every render.
+function UiKit.ensureStack(parent, padding)
+    for _, child in ipairs(parent:GetChildren()) do
+        if child:IsA("UIListLayout") then
+            return child
+        end
+    end
+    return UiKit.stack(parent, padding)
 end
 
 --- A vertical stack layout helper.
