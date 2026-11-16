@@ -58,7 +58,16 @@ local function pushState(player)
     if not session then
         return
     end
-    updateRemote:FireClient(player, session.state:view())
+    local view = session.state:view()
+    -- A card with nothing to press is a dead end. Say so in Output rather than
+    -- letting the client draw a screen the player cannot leave.
+    if view.phase == "event" and view.event and #view.event.choices == 0 then
+        warn(string.format(
+            "[NewWorldLife] event %s (%s) has no choices at age %d",
+            tostring(view.event.id), tostring(view.event.title), view.age
+        ))
+    end
+    updateRemote:FireClient(player, view)
 end
 
 local function newSession(player)

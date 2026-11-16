@@ -75,7 +75,9 @@ end
 local screen = UiKit.create("ScreenGui", {
     Name = "NewWorldLife",
     ResetOnSpawn = false,
-    IgnoreGuiInset = true,
+    -- Respect Roblox's top inset. With IgnoreGuiInset the top bar sat underneath
+    -- Roblox's own top-left controls (chat, menu), which covered the health bar.
+    IgnoreGuiInset = false,
     ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
 }, playerGui)
 
@@ -663,6 +665,18 @@ local function renderCard(view)
     choicesFrame.Size = UDim2.new(1, 0, 0, buttonArea)
     UiKit.clear(choicesFrame)
     UiKit.ensureStack(choicesFrame, 8)
+
+    -- Never strand the player: if the view arrives with nothing to press, give
+    -- them the button that moves the year on rather than a dead screen.
+    if #buttons == 0 then
+        buttons[#buttons + 1] = {
+            text = (view.phase == "outcome") and "Continue" or "Age Up",
+            accent = true,
+            onClick = function()
+                send((view.phase == "outcome") and "continue" or "ageUp")
+            end,
+        }
+    end
 
     for index, info in ipairs(buttons) do
         UiKit.button(choicesFrame, {
@@ -1429,4 +1443,25 @@ local function render(view)
     end
 end
 
-updateRemote.OnClientEvent:Connect(render)
+-- A render that throws used to leave a half-drawn screen and then fail again on
+-- every later update: the player sees one card and the game stops answering.
+-- Show the failure instead, so a stuck screen says why it is stuck.
+local function safeRender(view)
+    local ok, err = pcall(render, view)
+    if ok then
+        return
+    end
+    warn("[NewWorldLife] render failed: " .. tostring(err))
+    pcall(function()
+        UiKit.clear(card)
+        UiKit.label(card, {
+            Text = "RENDER ERROR\n\n" .. tostring(err),
+            Size = UDim2.new(1, 0, 0, 160),
+            TextSize = 15,
+            TextWrapped = true,
+            TextColor3 = Theme.bad,
+        })
+    end)
+end
+
+updateRemote.OnClientEvent:Connect(safeRender)
