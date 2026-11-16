@@ -17,6 +17,13 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
+-- This game is a screen, not a body. There is no avatar, no walkable world and
+-- no place for one to stand: left to itself Roblox spawns a character in empty
+-- space, drops it, drains its health bar, plays the death sound and respawns —
+-- a whoosh and an emptying bar on a loop, forever. Nobody needs a character, so
+-- nobody gets one.
+Players.CharacterAutoLoads = false
+
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Config = require(Shared.Config)
 local Rng = require(Shared.Rng)

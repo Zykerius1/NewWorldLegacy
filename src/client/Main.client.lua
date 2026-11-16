@@ -19,6 +19,43 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
+-- Hide the pieces of Roblox's own HUD that belong to a body we do not have.
+-- The health bar is the loud one: with no ground under a spawned character it
+-- drains to nothing, plays the death sound and comes back, over and over.
+-- SetCoreGuiEnabled throws if CoreGui is not ready yet, so it retries.
+local StarterGui = game:GetService("StarterGui")
+task.spawn(function()
+    for _ = 1, 20 do
+        local ok = pcall(function()
+            StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.Health, false)
+            StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.Backpack, false)
+        end)
+        if ok then
+            return
+        end
+        task.wait(0.25)
+    end
+end)
+
+-- Any character that does slip through (a plugin, a respawn request) keeps a
+-- full bar and makes no noise.
+local function silence(character)
+    local humanoid = character:WaitForChild("Humanoid", 5)
+    if humanoid then
+        humanoid.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOff
+        humanoid.Health = humanoid.MaxHealth
+    end
+    for _, descendant in ipairs(character:GetDescendants()) do
+        if descendant:IsA("Sound") then
+            descendant:Destroy()
+        end
+    end
+end
+player.CharacterAdded:Connect(silence)
+if player.Character then
+    silence(player.Character)
+end
+
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Config = require(Shared.Config)
 local UiKit = require(script.Parent.UiKit)
