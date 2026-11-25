@@ -217,12 +217,6 @@ local card = UiKit.panel(root, {
     Position = UDim2.new(0, 288, 0, 68),
 }, 22)
 
-local choicesFrame = UiKit.create("Frame", {
-    Name = "Choices",
-    BackgroundTransparency = 1,
-    Size = UDim2.new(1, 0, 0, 0),
-}, card)
-
 -- ---------------------------------------------------------------------------
 -- Bottom: the only button that matters
 -- ---------------------------------------------------------------------------
@@ -670,9 +664,19 @@ local function renderCard(view)
     end
 
     -- Choices, anchored to the bottom of the card.
-    choicesFrame.Position = UDim2.new(0, 0, 1, -buttonArea)
-    choicesFrame.Size = UDim2.new(1, 0, 0, buttonArea)
-    UiKit.clear(choicesFrame)
+    --
+    -- Built here, every render, and never held across one: clear(card) above
+    -- destroys every non-structural child of the card, and a choices frame kept
+    -- from a previous render would go with it. Buttons added to a destroyed
+    -- frame are parented to something that is no longer in the tree, so the card
+    -- drew its title and prose with nothing to press — while #buttons stayed
+    -- above zero, which is why the never-strand fallback below never fired.
+    local choicesFrame = UiKit.create("Frame", {
+        Name = "Choices",
+        BackgroundTransparency = 1,
+        Size = UDim2.new(1, 0, 0, buttonArea),
+        Position = UDim2.new(0, 0, 1, -buttonArea),
+    }, card)
     UiKit.ensureStack(choicesFrame, 8)
 
     -- Never strand the player: if the view arrives with nothing to press, give
