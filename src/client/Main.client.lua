@@ -75,9 +75,10 @@ end
 local screen = UiKit.create("ScreenGui", {
     Name = "NewWorldLife",
     ResetOnSpawn = false,
-    -- Respect Roblox's top inset. With IgnoreGuiInset the top bar sat underneath
-    -- Roblox's own top-left controls (chat, menu), which covered the health bar.
-    IgnoreGuiInset = false,
+    -- Fill the screen edge to edge. Roblox's own top-left controls sit over the
+    -- top strip, so the readouts they would cover (AGE, HEALTH) live at the far
+    -- right of that strip instead.
+    IgnoreGuiInset = true,
     ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
 }, playerGui)
 
@@ -104,7 +105,10 @@ UiKit.create("UIListLayout", {
     Padding = UDim.new(0, 20),
     SortOrder = Enum.SortOrder.LayoutOrder,
 }, topBar)
-UiKit.create("UIPadding", { PaddingLeft = UDim.new(0, 18) }, topBar)
+UiKit.create("UIPadding", {
+    PaddingLeft = UDim.new(0, 18),
+    PaddingRight = UDim.new(0, 18),
+}, topBar)
 
 local function topStat(title, width, order)
     local frame = UiKit.create("Frame", {
@@ -130,11 +134,12 @@ local function topStat(title, width, order)
 end
 
 -- Health gets a bar as well as a number: it is the only number that can end
--- a run without a choice.
+-- a run without a choice. It sits last, with AGE, so both readouts are pinned
+-- to the right end of the strip, clear of Roblox's top-left controls.
 local healthBlock = UiKit.create("Frame", {
     Size = UDim2.new(0, 190, 0, 36),
     BackgroundTransparency = 1,
-    LayoutOrder = 2,
+    LayoutOrder = 7,
 }, topBar)
 UiKit.label(healthBlock, {
     Text = "HEALTH",
@@ -156,20 +161,24 @@ local healthValue = UiKit.label(healthBlock, {
     TextXAlignment = Enum.TextXAlignment.Right,
 })
 
-local ageValue = topStat("AGE", 54, 1)
-local levelValue = topStat("LEVEL · EXP", 118, 3)
-local coinValue = topStat("COIN", 74, 4)
-local karmaValue = topStat("KARMA", 74, 5)
-local notorietyValue = topStat("NOTORIETY", 84, 6)
+local levelValue = topStat("LEVEL · EXP", 118, 1)
+local coinValue = topStat("COIN", 74, 2)
+local karmaValue = topStat("KARMA", 74, 3)
+local notorietyValue = topStat("NOTORIETY", 84, 4)
+-- The year line is the only elastic item: it absorbs whatever width is left
+-- between NOTORIETY and the right-hand pair, so AGE and HEALTH land flush with
+-- the right edge instead of wherever the fixed widths happen to end.
+-- 750 = the fixed widths (594) + the six 20px gaps (120) + both 18px paddings.
 local yearValue = UiKit.label(topBar, {
     Text = "",
-    Size = UDim2.new(0, 320, 0, 20),
-    LayoutOrder = 7,
+    Size = UDim2.new(1, -750, 0, 20),
+    LayoutOrder = 5,
     Font = UiKit.FontProse,
     TextSize = 14,
     TextColor3 = Theme.textDim,
     TextXAlignment = Enum.TextXAlignment.Right,
 })
+local ageValue = topStat("AGE", 54, 6)
 
 -- ---------------------------------------------------------------------------
 -- Left rail: the character sheet
